@@ -1,0 +1,44 @@
+# MediaMTX config — RTSP source → WebRTC (WHEP) for the browser viewer.
+# Only the protocols/paths we use are enabled; everything else is off to
+# avoid port conflicts and surface area.
+
+logLevel: info
+logDestinations: [stdout]
+
+# RTSP server is now ON — the ai-engine pushes the annotated H.264 stream
+# back to MediaMTX over RTSP, and MediaMTX republishes it via WebRTC/HLS to
+# desktop browsers and mobile apps.
+rtsp: yes
+rtspAddress: :8554
+hls: yes
+hlsAddress: :8888
+rtmp: no
+srt: no
+
+# WebRTC server. The browser POSTs an SDP offer to
+#   http://localhost:8889/cam/whep
+# and gets back an SDP answer (the WHEP protocol).
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcAllowOrigins: ['*']
+# ICE: use host candidates on the local interface; no STUN/TURN needed for localhost.
+webrtcICEServers2: []
+
+# API for ad-hoc checks (curl http://localhost:9997/v3/paths/list).
+api: yes
+apiAddress: :9997
+
+paths:
+  cam:
+    # Pull from the public RTSP camera. MediaMTX reconnects automatically.
+    source: rtsp://176.107.35.230:554/live/ch00_0
+    rtspTransport: tcp
+    sourceOnDemand: no
+
+  # Wildcard path: anything matching "<name>-annotated" accepts an incoming
+  # RTSP push from the ai-engine. One ffmpeg subprocess per camera publishes
+  # its annotated stream here, and MediaMTX fans it out to clients (WebRTC,
+  # HLS, RTSP) — single encode, many viewers, mobile-ready.
+  "~^.+-annotated$":
+    source: publisher

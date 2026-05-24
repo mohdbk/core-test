@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-feature-settings: "cv11", "ss01";
+  color: #e7e9ee;
+  background:
+    /* faint grid overlay */
+    linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px) 0 0/24px 24px,
+    linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px) 0 0/24px 24px,
+    radial-gradient(900px 600px at 8% -10%, rgba(124, 58, 237, .07), transparent 50%),
+    radial-gradient(900px 500px at 105% 0%, rgba(6, 182, 212, .06), transparent 50%),
+    #05060d;
+  background-attachment: fixed;
+}
+
+* { -webkit-font-smoothing: antialiased; }
+
+::-webkit-scrollbar           { width: 9px; height: 9px; }
+::-webkit-scrollbar-track     { background: transparent; }
+::-webkit-scrollbar-thumb     { background: #1a1c2c; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #2a2c46; background-clip: content-box; }
+
+@layer components {
+  /* Surfaces */
+  .surface        { @apply bg-elevated/80 border border-white/[.06] backdrop-blur-xl shadow-card; }
+  .surface-strong { @apply bg-elevated/95 border border-white/10 backdrop-blur-xl shadow-card; }
+  .pane           { @apply surface rounded-xl p-3.5; }
+  .pane-h         { @apply flex items-center gap-2 mb-3 min-h-[24px]; }
+  .pane-h-title   { @apply text-[11px] uppercase tracking-[0.16em] text-text/85 font-semibold flex items-center gap-1.5; }
+
+  /* Pills */
+  .pill {
+    @apply inline-flex items-center gap-1 px-1.5 h-5 rounded
+           border border-white/10 bg-white/[.04] text-[10px] text-subtle font-mono tabular-nums;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 h-7
+           text-xs font-medium border border-white/10 bg-white/[.04] text-text
+           hover:bg-white/[.08] hover:border-white/20
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 h-7
+           text-xs font-medium text-text border border-cyan-400/45 bg-cyan-400/10
+           hover:bg-cyan-400/[.18] hover:border-cyan-400/65
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 h-7
+           text-xs font-medium border border-rose-500/30 bg-rose-500/[.07] text-rose-400
+           hover:bg-rose-500/15 hover:border-rose-500/50
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-2.5 h-7
+           text-xs font-medium border border-transparent text-subtle
+           hover:bg-white/[.04] hover:text-text
+           transition-colors;
+  }
+
+  /* Form */
+  .input {
+    @apply w-full h-7 rounded-md px-2 text-xs bg-black/40 border border-white/10
+           text-text placeholder:text-muted/60 transition-colors
+           focus:outline-none focus:border-cyan-400/55 focus:bg-black/55
+           focus:shadow-[0_0_0_3px_rgba(34,211,238,.08)];
+  }
+  .label {
+    @apply text-[10px] uppercase tracking-[0.14em] text-subtle/85 font-medium;
+  }
+
+  /* Chips */
+  .chip {
+    @apply inline-flex items-center px-2 h-6 rounded text-[11px]
+           border border-white/10 bg-white/[.03] text-subtle font-mono
+           cursor-pointer select-none transition-colors
+           hover:border-white/20 hover:text-text;
+  }
+  .chip-on {
+    @apply border-cyan-400/45 bg-cyan-400/10 text-cyan-400;
+  }
+
+  /* Misc */
+  .divider { @apply h-px bg-white/5; }
+
+  /* Keyboard hint */
+  .kbd {
+    @apply inline-flex items-center justify-center min-w-[18px] h-[18px] px-1
+           rounded border border-white/15 bg-white/[.04] text-[10px]
+           text-subtle font-mono;
+  }
+
+  /* Focus accent line — used by NavRail and tab strips */
+  .accent-bar {
+    @apply absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full
+           bg-gradient-to-b from-cyan-400 to-cyan-500 shadow-[0_0_10px_rgba(34,211,238,.7)];
+  }
+}
+
+:focus-visible {
+  outline: 1px solid rgba(34, 211, 238, .65);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Subtle dotted scanline behind the video stage — only on .stage-bg */
+.stage-bg {
+  background-image:
+    radial-gradient(rgba(255,255,255,.04) 1px, transparent 1px);
+  background-size: 18px 18px;
+}

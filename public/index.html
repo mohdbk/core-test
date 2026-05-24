@@ -1,0 +1,1896 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RTSP Annotator — Demo</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; background: #0b0d10; color: #e6e8eb;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .app { display: grid; grid-template-columns: 1fr 420px; grid-template-rows: auto 1fr;
+      height: 100%; }
+    header { grid-column: 1 / -1; padding: 10px 14px; border-bottom: 1px solid #1c2026;
+      display: flex; align-items: center; gap: 10px; }
+    header h1 { font-size: 13px; font-weight: 600; margin: 0; }
+    header .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; transition: background .2s; }
+    header .dot.live { background: #22c55e; box-shadow: 0 0 8px #22c55e88; }
+    header .dot.warn { background: #f59e0b; }
+    header .dot.err  { background: #ef4444; }
+    header .spacer { flex: 1; }
+    header .meta { color: #8b94a1; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .viewport { display: grid; place-items: center; padding: 14px; min-height: 0; min-width: 0; }
+    .stage { position: relative; line-height: 0; max-width: 100%; max-height: 100%; }
+    .stage video { display: block; max-width: 100%; max-height: calc(100vh - 90px);
+      border-radius: 6px; outline: 1px solid #1c2026; background: #000; }
+    .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+      cursor: crosshair; touch-action: none; }
+
+    aside { border-left: 1px solid #1c2026; min-width: 0; display: flex; flex-direction: column;
+      overflow: hidden; }
+    .scroll { overflow: auto; flex: 1; }
+    .pane { padding: 12px 14px; border-bottom: 1px solid #1c2026; }
+    .pane h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px;
+      color: #8b94a1; margin: 0 0 8px; display: flex; align-items: center; gap: 8px; }
+    .pane h2 .count { background: #1c2026; padding: 1px 6px; border-radius: 10px; font-size: 10px; }
+    .pane h2 .right { margin-left: auto; display: flex; gap: 6px; }
+    .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    button, .btn { background: #1c2026; color: #e6e8eb; border: 1px solid #2a3038;
+      padding: 5px 9px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px; }
+    button:hover { background: #252b33; }
+    button:active { background: #2e353e; }
+    button.primary { background: #15803d; border-color: #16a34a; }
+    button.primary:hover { background: #166534; }
+    button.accent { background: #1e40af; border-color: #2563eb; }
+    button.accent:hover { background: #1d4ed8; }
+    button.danger { background: #1c2026; border-color: #7f1d1d; color: #fca5a5; }
+    button.danger:hover { background: #2a1414; }
+    button.ghost { background: transparent; border-color: #2a3038; }
+    input[type=text], input[type=number], select { background: #0e1115; color: #e6e8eb; border: 1px solid #2a3038;
+      padding: 5px 8px; border-radius: 6px; font: inherit; font-size: 12px; box-sizing: border-box; }
+    input[type=text]:focus, input[type=number]:focus, select:focus { outline: none; border-color: #3b4250; }
+
+    /* Segmented draw-mode control */
+    .seg { display: inline-flex; border: 1px solid #2a3038; border-radius: 6px; overflow: hidden; }
+    .seg-btn { background: transparent; border: none; padding: 5px 12px; border-radius: 0; color: #8b94a1; }
+    .seg-btn.on { background: #1e40af; color: #e6e8eb; }
+    .seg-btn + .seg-btn { border-left: 1px solid #2a3038; }
+
+    /* Top-level view tabs (Config / Stream) */
+    .tabs { display: inline-flex; gap: 4px; margin-left: 6px; }
+    .tab  { color: #8b94a1; text-decoration: none; padding: 4px 12px; border-radius: 6px;
+            border: 1px solid transparent; font-size: 12px; cursor: pointer; user-select: none; }
+    .tab:hover  { background: #16191e; }
+    .tab.active { color: #e6e8eb; background: #1c2026; border-color: #2a3038; }
+
+    /* Camera list cards on the config view */
+    .cam-card { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center;
+                padding: 8px 10px; border-radius: 6px; border: 1px solid #1c2026;
+                background: #0e1115; margin-bottom: 6px; cursor: pointer; }
+    .cam-card:hover { background: #11141a; }
+    .cam-card.selected { border-color: #22c55e55; box-shadow: 0 0 0 1px #22c55e22; }
+    .cam-card .cdot { width: 8px; height: 8px; border-radius: 50%; }
+    .cam-card .cdot.on  { background: #22c55e; box-shadow: 0 0 4px #22c55e66; }
+    .cam-card .cdot.off { background: #6b7280; }
+    .cam-card .meta-line { color: #6b7280; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 2px; }
+    .cam-card .actions { display: flex; gap: 4px; }
+    .cam-card .actions button { padding: 2px 6px; font-size: 11px; }
+
+    /* Stream-view camera details key/value rows */
+    .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px;
+          font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .kv .k { color: #8b94a1; }
+    .kv .v { color: #e6e8eb; word-break: break-all; }
+
+    /* Zone & module cards */
+    .card { padding: 8px 10px; border-radius: 6px; border: 1px solid #1c2026; background: #0e1115;
+      margin-bottom: 6px; }
+    .card.selected { border-color: #22c55e55; box-shadow: 0 0 0 1px #22c55e22; }
+    .card-header { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; }
+    .swatch { width: 10px; height: 10px; border-radius: 2px; }
+    .card-body { margin-top: 6px; display: grid; gap: 6px; }
+    .card-id { color: #6b7280; font: 11px ui-monospace, monospace; }
+    .kind-badge { font: 10px ui-monospace, monospace; padding: 1px 6px; border-radius: 10px;
+      border: 1px solid #2a3038; color: #8b94a1; white-space: nowrap; }
+    .kind-badge.line { border-color: #93c5fd55; color: #93c5fd; }
+    .kind-badge.polygon { border-color: #22c55e55; color: #22c55e; }
+    .field { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; }
+    .field label { color: #8b94a1; font-size: 11px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .chip { font-size: 11px; padding: 3px 8px; border-radius: 12px; border: 1px solid #2a3038;
+      background: #0b0d10; color: #8b94a1; cursor: pointer; user-select: none; }
+    .chip.on { background: #15803d; border-color: #16a34a; color: #e6e8eb; }
+    .chip.intent { border-color: #2563eb; }
+    .chip.intent.on { background: #1e40af; }
+
+    /* Config preview */
+    .config-wrap { background: #0e1115; border: 1px solid #1c2026; border-radius: 6px;
+      max-height: 360px; overflow: auto; }
+    pre.config { margin: 0; padding: 10px 12px; font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #d1d5db; white-space: pre; }
+    pre.config .k { color: #93c5fd; }
+    pre.config .s { color: #fcd34d; }
+    pre.config .n { color: #c4b5fd; }
+    pre.config .b { color: #f472b6; }
+    pre.config .p { color: #6b7280; }
+
+    .empty { color: #6b7280; padding: 8px 4px; font-style: italic; font-size: 12px; }
+    .kbd { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #11141a;
+      border: 1px solid #1c2026; font: 11px ui-monospace, monospace; color: #8b94a1; }
+    .help { color: #6b7280; font-size: 11px; line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <span id="dot" class="dot"></span>
+      <h1>RTSP Annotator</h1>
+      <nav class="tabs">
+        <a href="#config" id="tabConfig" class="tab active">Config</a>
+        <a href="#stream" id="tabStream" class="tab">Stream</a>
+      </nav>
+      <select id="cameraSelect" style="background:#0e1115; color:#e6e8eb; border:1px solid #2a3038; padding:4px 8px; border-radius:6px; font-size:12px;"></select>
+      <button id="enableToggle" class="ghost" style="font-size:11px; padding:3px 9px;">—</button>
+      <button id="addCameraBtn" class="ghost" data-view="config" style="font-size:11px; padding:3px 9px;">+ camera</button>
+      <span id="status" class="meta">connecting…</span>
+      <span class="meta" id="saveStatus" data-view="config" style="margin-left:auto;">—</span>
+      <span class="spacer"></span>
+      <span class="meta" id="dims">—</span>
+    </header>
+
+    <div class="viewport">
+      <div class="stage" id="stage">
+        <!-- Live feed: WebRTC consuming MediaMTX path "{camera_id}-annotated".
+             The ai-engine pulls raw RTSP from the camera, draws bboxes, and
+             pushes H.264 back to MediaMTX. MediaMTX fans the annotated stream
+             out to viewers (this browser via WebRTC, mobile via HLS, etc.).
+             Boxes are baked in, so the canvas overlay only renders zones. -->
+        <video id="video" autoplay muted playsinline
+               style="display:block; max-width:100%; max-height:calc(100vh - 90px);
+                      border-radius:6px; outline:1px solid #1c2026; background:#000;"></video>
+        <canvas id="overlay"></canvas>
+      </div>
+    </div>
+
+    <aside>
+      <div class="scroll">
+
+        <!-- Cameras (config view only) ───────────────────────────────── -->
+        <div class="pane" data-view="config">
+          <h2>
+            Cameras <span class="count" id="cameraCount">0</span>
+            <span class="right">
+              <button class="ghost" id="addCameraBtn2" style="font-size:11px;">+ camera</button>
+            </span>
+          </h2>
+          <div id="cameraList"></div>
+        </div>
+
+        <!-- Camera details (stream view only) ─────────────────────────── -->
+        <div class="pane" data-view="stream">
+          <h2>Camera</h2>
+          <div class="kv" id="cameraDetails"></div>
+        </div>
+
+        <!-- Draw tools ─────────────────────────────────────────────────── -->
+        <div class="pane" data-view="config">
+          <h2>Draw tools</h2>
+          <div class="row" style="margin-bottom:6px;">
+            <div class="seg" role="tablist">
+              <button id="modePolygon" class="seg-btn on" title="Polygon (closed region)">Polygon</button>
+              <button id="modeLine" class="seg-btn" title="Line / tripwire (2-point segment)">Line</button>
+            </div>
+          </div>
+          <div class="row">
+            <input type="text" id="label" placeholder="zone name" value="zone" style="flex:1; min-width:120px;" />
+            <button id="finish" class="primary">Finish</button>
+            <button id="cancel">Cancel</button>
+            <button id="undo">Undo pt</button>
+          </div>
+          <div class="help" id="drawHelp" style="margin-top:8px;"></div>
+        </div>
+
+        <!-- Zones ───────────────────────────────────────────────────────── -->
+        <div class="pane" data-view="config">
+          <h2>
+            Zones <span class="count" id="zoneCount">0</span>
+            <span class="right">
+              <button class="ghost" id="clearZones">Clear</button>
+            </span>
+          </h2>
+          <div id="zones"></div>
+        </div>
+
+        <!-- Detectors ──────────────────────────────────────────────────── -->
+        <div class="pane" data-view="config">
+          <h2>
+            Detectors <span class="count" id="detectorCount">0</span>
+            <span class="right">
+              <select id="addDetectorType">
+                <option value="object_detection">Object detection</option>
+                <option value="ppe_detection">PPE detection (custom)</option>
+              </select>
+              <button class="accent" id="addDetectorBtn">+ Add</button>
+            </span>
+          </h2>
+          <div id="detectorList"></div>
+        </div>
+
+        <!-- Rules ──────────────────────────────────────────────────────── -->
+        <div class="pane" data-view="config">
+          <h2>
+            Rules <span class="count" id="ruleCount">0</span>
+            <span class="right">
+              <select id="addRuleType">
+                <option value="intrusion">Zone intrusion</option>
+                <option value="presence">Object presence</option>
+                <option value="ppe_compliance">PPE compliance</option>
+              </select>
+              <button class="accent" id="addRuleBtn">+ Add</button>
+            </span>
+          </h2>
+          <div id="ruleList"></div>
+        </div>
+
+        <!-- AI engine: live detections + events ───────────────────────── -->
+        <div class="pane" data-view="both">
+          <h2>
+            AI Engine <span class="count" id="engineStatusBadge" style="background:#1c2026; color:#8b94a1;">offline</span>
+            <span class="right" style="font: 11px ui-monospace,monospace; color:#8b94a1;" id="engineMeta">—</span>
+          </h2>
+          <div id="events" style="max-height: 240px; overflow: auto;"></div>
+        </div>
+
+        <!-- Config preview ──────────────────────────────────────────────── -->
+        <div class="pane" data-view="config">
+          <h2>
+            Config <span class="count" id="configBytes">0 B</span>
+            <span class="right">
+              <button class="ghost" id="copyConfig">Copy</button>
+              <button class="accent" id="downloadConfig">Download</button>
+            </span>
+          </h2>
+          <div class="config-wrap">
+            <pre class="config" id="config"></pre>
+          </div>
+        </div>
+
+        <!-- Frame capture ──────────────────────────────────────────────── -->
+        <div class="pane" data-view="config">
+          <div class="row">
+            <button id="capture">Capture annotated frame (.jpg)</button>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Module registry — extending this dict adds a new use case end-to-end.
+    // ═══════════════════════════════════════════════════════════════════════
+    // Tuned for hafizqaim/yolov8-ppe (17 classes including boots, harness, vest…).
+    // Full list of classes the detector can emit (positive + negative variants):
+    const PPE_DETECTOR_CLASSES = [
+      "head_helmet", "head_nohelmet",
+      "face_mask",   "face_nomask",
+      "hand_glove",  "hand_noglove",
+      "glasses",     "No_Glasses",
+      "Ear-protection", "No_Ear-Protection",
+      "boots",       "Barefoots", "Sandals", "shoes",
+      "Harness", "vest", "person",
+    ];
+    // Positive items a user can flag as REQUIRED in a PPE compliance rule.
+    // The engine maps each to its absence class (e.g. head_helmet → head_nohelmet).
+    const PPE_REQUIRED_ITEMS = [
+      "head_helmet", "face_mask", "hand_glove",
+      "glasses", "Ear-protection", "boots",
+    ];
+
+    // Full COCO class list — matches ai-engine/modules.py:COCO_TO_NAME order.
+    const OBJECT_CLASSES = [
+      "person", "bicycle", "car", "motorcycle", "airplane",
+      "bus", "train", "truck", "boat", "traffic light",
+      "fire hydrant", "stop sign", "parking meter", "bench",
+      "bird", "cat", "dog", "horse", "sheep", "cow",
+      "elephant", "bear", "zebra", "giraffe",
+      "backpack", "umbrella", "handbag", "tie", "suitcase",
+      "frisbee", "skis", "snowboard", "sports ball", "kite",
+      "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+      "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl",
+      "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+      "hot dog", "pizza", "donut", "cake",
+      "chair", "couch", "potted plant", "bed", "dining table", "toilet",
+      "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+      "microwave", "oven", "toaster", "sink", "refrigerator",
+      "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
+    ];
+
+    // Common min-confidence param shared by detectors.
+    const MIN_CONF_PARAM = {
+      kind: "number", default: 0.5, min: 0.05, max: 0.95, step: 0.05, label: "Min conf",
+    };
+
+    // ─── Detectors — produce streams of detections (class, bbox, conf, track_id).
+    // The `model` param picks the backing weights. The engine caches loaded models.
+    const DETECTOR_TYPES = {
+      object_detection: {
+        label: "Object detection (COCO)",
+        color: "#3b82f6",
+        params: {
+          model: {
+            kind: "select",
+            options: [
+              { value: "yolov8n", label: "YOLOv8n (fastest)" },
+              { value: "yolov8s", label: "YOLOv8s (balanced)" },
+              { value: "yolov8m", label: "YOLOv8m (more accurate)" },
+              { value: "yolov8l", label: "YOLOv8l (heavy)" },
+            ],
+            default: "yolov8s", label: "Model",
+          },
+          classes:  { kind: "multi", options: OBJECT_CLASSES,
+                      default: ["person", "bicycle", "car", "motorcycle", "bus", "truck"], label: "Classes" },
+          min_conf: MIN_CONF_PARAM,
+        },
+      },
+      ppe_detection: {
+        label: "PPE detection (hafizqaim/yolov8-ppe)",
+        color: "#22c55e",
+        params: {
+          model:    { kind: "text",  default: "models/ppe.pt", label: "Model path" },
+          classes:  { kind: "multi", options: PPE_DETECTOR_CLASSES,
+                      default: [...PPE_DETECTOR_CLASSES], label: "Classes" },
+          min_conf: MIN_CONF_PARAM,
+        },
+      },
+    };
+
+    // ─── Rules — consume one detector's stream and emit events.
+    // Each rule's `detector` field references a detector module by id.
+    const RULE_TYPES = {
+      intrusion: {
+        label: "Zone intrusion",
+        color: "#ef4444",
+        params: {
+          detector: { kind: "detector_ref", default: null, label: "Detector" },
+          classes:  { kind: "multi", source: "detector_classes", default: ["person"], label: "Classes" },
+          direction: {
+            kind: "select",
+            options: [
+              { value: "any",    label: "↔ any" },
+              { value: "a_to_b", label: "→ A to B" },
+              { value: "b_to_a", label: "← B to A" },
+            ],
+            default: "any", label: "Direction",
+            requires: { zoneKind: "line" },
+          },
+        },
+        defaultZones: [],
+      },
+      presence: {
+        label: "Object presence",
+        color: "#60a5fa",
+        params: {
+          detector: { kind: "detector_ref", default: null, label: "Detector" },
+          classes:  { kind: "multi", source: "detector_classes", default: ["person", "car"], label: "Classes" },
+          min_duration_seconds: { kind: "number", default: 0, min: 0, max: 3600, step: 1, label: "Min duration (s)" },
+        },
+        defaultZones: ["*"],
+      },
+      ppe_compliance: {
+        label: "PPE compliance",
+        color: "#22c55e",
+        params: {
+          detector: { kind: "detector_ref", default: null, label: "Detector" },
+          // Curated positive-only list — detecting absence is the engine's job
+          // via PPE_NEGATIVE_TO_POSITIVE; the user just picks what should be worn.
+          required: { kind: "multi", options: PPE_REQUIRED_ITEMS,
+                      default: ["head_helmet"], label: "Required PPE" },
+        },
+        defaultZones: ["*"],
+      },
+    };
+
+    function isDetector(type) { return type in DETECTOR_TYPES; }
+    function isRule(type)     { return type in RULE_TYPES; }
+    function getSpec(type)    { return DETECTOR_TYPES[type] || RULE_TYPES[type] || null; }
+
+    // For rule params marked `source: "detector_classes"`, the chip options
+    // come from the assigned detector's `classes` field — a rule can only
+    // care about classes its detector actually produces.
+    function getEffectiveOptions(paramSpec, mod) {
+      if (paramSpec.source === "detector_classes") {
+        const det = modules.find(d => d.id === mod.params?.detector);
+        if (det && isDetector(det.type) && Array.isArray(det.params.classes)) {
+          return det.params.classes;
+        }
+        return [];
+      }
+      return paramSpec.options || [];
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   State
+    // ═══════════════════════════════════════════════════════════════════════
+    const video      = document.getElementById("video");
+    const canvas     = document.getElementById("overlay");
+    const ctx        = canvas.getContext("2d");
+    const statusEl   = document.getElementById("status");
+    const dot        = document.getElementById("dot");
+    const dimsEl     = document.getElementById("dims");
+    const labelInput = document.getElementById("label");
+    const zonesEl    = document.getElementById("zones");
+    const configEl   = document.getElementById("config");
+    const helpEl     = document.getElementById("drawHelp");
+
+    // Native-resolution coordinates so annotations are display-independent.
+    // Each zone has a `kind`: "polygon" (closed region, containment test) or
+    // "line" (open polyline / tripwire, crossing test). Lines also carry a
+    // `direction`: "any" | "a_to_b" | "b_to_a".
+    const zones = [];      // { id (uuid), name, color, kind, points: [{x,y}, …] }
+    const modules = [];    // { id (uuid), type, params, zones: [zoneId|"*"] }
+    let draft = null;
+    let hoverPt = null;
+    let selectedZoneId = null;
+    let nextZoneNum = 1;   // only used for color-palette rotation now
+    let drawMode = "polygon";        // "polygon" | "line"
+    // A line is exactly 2 points: points[0] = A, points[1] = B. Direction
+    // semantics (a_to_b / b_to_a / any) belong to the rule that consumes the
+    // line, not to the line itself — see the intrusion module's `direction`.
+
+    // Server sync — the camera config lives in SQLite via the ai-engine API.
+    // Multi-camera state: the selected camera id is the scope for every API
+    // call, WS subscription, and WebRTC stream below. It can be overridden
+    // by the ?camera= URL param.
+    let selectedCameraId = "cam";
+    let cameras = [];                 // [{id,name,source,enabled,zone_count,detector_count,rule_count,...}]
+    let lastSavedJson = null;
+    let saveTimer = null;
+    let suspendSave = false;
+
+    // Live transport handles, kept module-level so switchCamera() can tear
+    // them down cleanly before re-opening against the new camera.
+    let _pc = null;                   // current RTCPeerConnection for WHEP
+    let _ws = null;                   // current WebSocket for /ws/events
+
+    // Top-level view ("config" or "stream"). The canvas, video, and camera
+    // selector are shared across both; the sidebar panes show/hide via
+    // [data-view] attrs, and the canvas pointer handlers no-op in stream view.
+    let currentView = "config";
+
+    // Vertex editing — when a zone is "unlocked" (z.editing === true), its
+    // vertices become draggable handles on the canvas.
+    let draggingVertex = null;  // { zone, idx } while a drag is active
+
+    // Live data pushed by the AI engine over /ws/events.
+    let liveDetections = [];
+    const eventLog = [];                      // newest first, capped at 100
+    const recentEventByTrack = new Map();     // track_id → last event ts (s)
+
+    // (Detection boxes are drawn server-side and burned into the MJPEG; no
+    // client-side buffer needed. The WS stream is kept only for the Events
+    // panel and engine status.)
+
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    function isUuid(s) { return typeof s === "string" && UUID_RE.test(s); }
+    function newUuid() {
+      if (crypto.randomUUID) return crypto.randomUUID();
+      return "id-" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    }
+
+    const zonePalette = ["#22c55e", "#f59e0b", "#60a5fa", "#f472b6", "#a78bfa", "#34d399", "#fb7185", "#facc15"];
+
+    function setStatus(text, level) {
+      statusEl.textContent = text;
+      dot.classList.remove("live", "warn", "err");
+      if (level) dot.classList.add(level);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   WHEP client — consumes MediaMTX's annotated stream
+    //   (boxes burned in by the engine's ffmpeg subprocess).
+    // ═══════════════════════════════════════════════════════════════════════
+    async function startWHEP() {
+      // Tear down any prior PC + media before opening a new one, otherwise
+      // switchCamera() leaves orphaned tracks playing.
+      if (_pc) { try { _pc.close(); } catch {} _pc = null; }
+      if (video.srcObject) {
+        try { video.srcObject.getTracks().forEach(t => t.stop()); } catch {}
+        video.srcObject = null;
+      }
+
+      // Annotated path = "{camera_id}-annotated" in MediaMTX. This is the
+      // single canonical stream that all viewers consume (desktop WebRTC,
+      // mobile HLS, RTSP recorders). One encode, many viewers, mobile-ready.
+      const whepUrl = `http://${location.hostname}:8889/${encodeURIComponent(selectedCameraId)}-annotated/whep`;
+
+      setStatus("negotiating WebRTC…", "warn");
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      _pc = pc;
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.addTransceiver("audio", { direction: "recvonly" });
+      pc.ontrack = (e) => {
+        if (video.srcObject) return;
+        video.srcObject = e.streams[0];
+        const p = video.play();
+        if (p && p.catch) p.catch((err) => {
+          console.warn("video.play() failed:", err);
+          setStatus(`tap the video to play (${err.name})`, "warn");
+          stage.addEventListener("click", () => video.play().catch(()=>{}), { once: true });
+        });
+      };
+      pc.oniceconnectionstatechange = () => {
+        if (pc !== _pc) return;
+        const s = pc.iceConnectionState;
+        if (s === "connected" || s === "completed") setStatus("live", "live");
+        else if (s === "failed" || s === "disconnected") {
+          setStatus("disconnected — retrying…", "err");
+          setTimeout(() => { if (pc === _pc) startWHEP(); }, 1500);
+        }
+      };
+
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitForIceComplete(pc, 1500);
+        if (pc !== _pc) return;
+        const res = await fetch(whepUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/sdp" },
+          body: pc.localDescription.sdp,
+        });
+        if (!res.ok) throw new Error(`WHEP ${res.status}: ${await res.text()}`);
+        const answerSdp = await res.text();
+        if (pc !== _pc) return;
+        await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+      } catch (err) {
+        console.error(err);
+        setStatus(`WHEP failed: ${err.message} — retrying…`, "err");
+        setTimeout(() => { if (pc === _pc) startWHEP(); }, 2000);
+      }
+    }
+    function waitForIceComplete(pc, timeoutMs) {
+      return new Promise((resolve) => {
+        if (pc.iceGatheringState === "complete") return resolve();
+        const done = () => { pc.removeEventListener("icegatheringstatechange", check); clearTimeout(t); resolve(); };
+        const check = () => { if (pc.iceGatheringState === "complete") done(); };
+        pc.addEventListener("icegatheringstatechange", check);
+        const t = setTimeout(done, timeoutMs);
+      });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Canvas sizing + coordinate mapping
+    // ═══════════════════════════════════════════════════════════════════════
+    // Canvas overlay is sized to the live video's native resolution so that
+    // zone coordinates (stored in pixels) overlay accurately at any display
+    // size. WebRTC fires loadedmetadata once the first frame arrives.
+    function sizeCanvas() {
+      if (video.videoWidth && video.videoHeight) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        updateDims();
+        renderCanvas();
+      }
+    }
+    function updateDims() {
+      if (video.videoWidth)
+        dimsEl.textContent = `${video.videoWidth}×${video.videoHeight} · displayed ${video.clientWidth}×${video.clientHeight}`;
+    }
+    video.addEventListener("loadedmetadata", sizeCanvas);
+    video.addEventListener("resize", sizeCanvas);
+    new ResizeObserver(updateDims).observe(video);
+
+    function toNative(e) {
+      const r = canvas.getBoundingClientRect();
+      const W = canvas.width || 1, H = canvas.height || 1;
+      const sx = W / r.width, sy = H / r.height;
+      return {
+        x: Math.max(0, Math.min(W, (e.clientX - r.left) * sx)),
+        y: Math.max(0, Math.min(H, (e.clientY - r.top)  * sy)),
+      };
+    }
+    function displayDist(a, b) {
+      const r = canvas.getBoundingClientRect();
+      const sx = r.width / canvas.width, sy = r.height / canvas.height;
+      return Math.hypot((a.x - b.x) * sx, (a.y - b.y) * sy);
+    }
+    function pointInPolygon(pt, pts) {
+      let inside = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+        const hit = ((yi > pt.y) !== (yj > pt.y)) &&
+          (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi + 1e-9) + xi);
+        if (hit) inside = !inside;
+      }
+      return inside;
+    }
+    // Distance in DISPLAY pixels from p to a polyline (scales x/y to screen).
+    function distToSegmentDisplay(p, a, b) {
+      const r = canvas.getBoundingClientRect();
+      const sx = r.width / canvas.width, sy = r.height / canvas.height;
+      const ax = a.x*sx, ay = a.y*sy, bx = b.x*sx, by = b.y*sy;
+      const px = p.x*sx, py = p.y*sy;
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx*dx + dy*dy;
+      let t = len2 === 0 ? 0 : ((px - ax)*dx + (py - ay)*dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      const cx = ax + t*dx, cy = ay + t*dy;
+      return Math.hypot(px - cx, py - cy);
+    }
+    function pointNearPolyline(p, pts, threshold) {
+      for (let i = 0; i < pts.length - 1; i++)
+        if (distToSegmentDisplay(p, pts[i], pts[i+1]) <= threshold) return true;
+      return false;
+    }
+    function findZoneAt(p) {
+      for (let i = zones.length - 1; i >= 0; i--) {
+        const z = zones[i];
+        if (z.kind === "line") {
+          if (pointNearPolyline(p, z.points, 10)) return z;
+        } else {
+          if (pointInPolygon(p, z.points)) return z;
+        }
+      }
+      return null;
+    }
+    // Find a draggable vertex handle near the pointer — only on zones that
+    // are currently unlocked (z.editing === true). 14 display px hit radius.
+    function findGrabbedVertex(p) {
+      const THRESHOLD = 14;
+      let best = null;
+      let bestDist = THRESHOLD + 1;
+      for (const z of zones) {
+        if (!z.editing) continue;
+        for (let i = 0; i < z.points.length; i++) {
+          const d = displayDist(p, z.points[i]);
+          if (d < bestDist) { bestDist = d; best = { zone: z, idx: i }; }
+        }
+      }
+      return best;
+    }
+
+    function anyEditing() { return zones.some(z => z.editing); }
+
+    // A param applies when no `requires` is set, or when at least one of the
+    // module's assigned zones matches the required kind. Hidden params are
+    // also stripped from the emitted config so output stays unambiguous.
+    function paramApplies(paramSpec, mod) {
+      const req = paramSpec.requires;
+      if (!req) return true;
+      if (req.zoneKind) {
+        return mod.zones.some(zid => {
+          const z = zones.find(z2 => z2.id === zid);
+          return z && z.kind === req.zoneKind;
+        });
+      }
+      return true;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Draw-mode toggle
+    // ═══════════════════════════════════════════════════════════════════════
+    function setDrawMode(m) {
+      if (drawMode === m) return;
+      if (draft) cancelDraft();
+      drawMode = m;
+      document.getElementById("modePolygon").classList.toggle("on", m === "polygon");
+      document.getElementById("modeLine").classList.toggle("on", m === "line");
+      updateDrawHelp();
+    }
+    function updateDrawHelp() {
+      helpEl.innerHTML = drawMode === "line"
+        ? `click point <strong>A</strong>, then point <strong>B</strong> — auto-commits · `
+        + `<span class="kbd">Esc</span> cancel · <span class="kbd">⌫</span> remove A`
+        : `click to add vertex · click first vertex / <span class="kbd">Enter</span> / dbl-click to close · `
+        + `<span class="kbd">Esc</span> cancel · <span class="kbd">⌫</span> remove last`;
+    }
+    document.getElementById("modePolygon").addEventListener("click", () => setDrawMode("polygon"));
+    document.getElementById("modeLine").addEventListener("click", () => setDrawMode("line"));
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Drawing — vertex-by-vertex; behavior branches on draft.mode
+    // ═══════════════════════════════════════════════════════════════════════
+    canvas.addEventListener("pointermove", (e) => {
+      if (currentView !== "config") return;   // read-only in stream view
+      // Vertex drag — drives the editing UX. Bypass all other handlers.
+      if (draggingVertex) {
+        const p = toNative(e);
+        draggingVertex.zone.points[draggingVertex.idx] = { x: p.x, y: p.y };
+        renderCanvas();
+        return;
+      }
+      hoverPt = toNative(e);
+      if (draft) renderCanvas();
+    });
+    canvas.addEventListener("pointerleave", () => { hoverPt = null; if (draft) renderCanvas(); });
+
+    canvas.addEventListener("pointerup", (e) => {
+      if (currentView !== "config") return;
+      if (draggingVertex) {
+        try { canvas.releasePointerCapture(e.pointerId); } catch {}
+        draggingVertex = null;
+        renderAll();   // full render triggers scheduleSave with the new points
+      }
+    });
+
+    canvas.addEventListener("pointerdown", (e) => {
+      if (currentView !== "config") return;
+      if (e.button !== 0) return;
+      const p = toNative(e);
+
+      // Mid-drawing: same as before — add a vertex or auto-commit.
+      if (draft) {
+        if (draft.mode === "polygon" && draft.points.length >= 3 && displayDist(p, draft.points[0]) < 10) {
+          commitDraft();
+          return;
+        }
+        draft.points.push(p);
+        if (draft.mode === "line" && draft.points.length === 2) {
+          commitDraft();
+          return;
+        }
+        renderCanvas();
+        return;
+      }
+
+      // Not drawing. First chance: grab a vertex handle on an unlocked zone.
+      const grab = findGrabbedVertex(p);
+      if (grab) {
+        draggingVertex = grab;
+        selectedZoneId = grab.zone.id;
+        try { canvas.setPointerCapture(e.pointerId); } catch {}
+        renderAll();
+        return;
+      }
+
+      // Second chance: click inside an existing zone selects it.
+      const hit = findZoneAt(p);
+      if (hit) { selectedZoneId = hit.id; renderAll(); return; }
+
+      // Don't start a new draft while a zone is unlocked — the user is editing,
+      // not drawing. Lock the zone first to draw a new one.
+      if (anyEditing()) return;
+
+      draft = { points: [p], mode: drawMode };
+      selectedZoneId = null;
+      renderAll();
+    });
+    canvas.addEventListener("dblclick", () => {
+      if (draft && draft.points.length >= minPointsFor(draft.mode)) commitDraft();
+    });
+    canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); cancelDraft(); });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+      if (e.key === "Enter") {
+        if (draft && draft.points.length >= minPointsFor(draft.mode)) { commitDraft(); e.preventDefault(); }
+      } else if (e.key === "Escape") {
+        if (draft) { cancelDraft(); e.preventDefault(); }
+        else { selectedZoneId = null; renderAll(); }
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        if (draft) {
+          draft.points.pop();
+          if (draft.points.length === 0) draft = null;
+          renderCanvas(); e.preventDefault();
+        } else if (selectedZoneId != null) {
+          deleteZone(selectedZoneId);
+          e.preventDefault();
+        }
+      }
+    });
+
+    function minPointsFor(mode) { return mode === "line" ? 2 : 3; }
+
+    // Every persistent entity (zones, detectors, rules, cameras) is keyed by
+    // an immutable UUID so renames/edits never break references.
+    const newZoneId = newUuid;
+    function commitDraft() {
+      if (!draft || draft.points.length < minPointsFor(draft.mode)) return;
+      const fallback = draft.mode === "line" ? "line" : "zone";
+      const name = (labelInput.value || fallback).trim();
+      const color = zonePalette[(nextZoneNum - 1) % zonePalette.length];
+      // Lines: keep exactly the first 2 points (defensive — auto-commit
+      // already ensures this, but in case Enter/Finish is hit early).
+      const points = draft.mode === "line" ? draft.points.slice(0, 2) : draft.points;
+      zones.push({
+        id: newZoneId(),
+        name,
+        color,
+        kind: draft.mode,
+        editing: false,
+        points,
+      });
+      nextZoneNum++;
+      selectedZoneId = zones[zones.length - 1].id;
+      draft = null;
+      renderAll();
+    }
+    function cancelDraft() { draft = null; renderCanvas(); }
+    function deleteZone(id) {
+      const i = zones.findIndex(z => z.id === id);
+      if (i < 0) return;
+      zones.splice(i, 1);
+      for (const m of modules) m.zones = m.zones.filter(z => z !== id);
+      if (selectedZoneId === id) selectedZoneId = null;
+      renderAll();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Modules — detectors and rules live in the same `modules` array but
+    //   are distinguished by type and rendered into separate panes.
+    // ═══════════════════════════════════════════════════════════════════════
+    const newDetectorId = newUuid;
+    const newRuleId     = newUuid;
+
+    function makeDefaultParams(spec) {
+      const params = {};
+      for (const [k, p] of Object.entries(spec.params)) {
+        params[k] = (p.kind === "multi") ? [...p.default] : p.default;
+      }
+      return params;
+    }
+
+    function addDetector(type) {
+      const spec = DETECTOR_TYPES[type];
+      if (!spec) return;
+      modules.push({
+        id: newDetectorId(),
+        type,
+        params: makeDefaultParams(spec),
+        zones: [],   // detectors are frame-wide; this stays empty
+      });
+      renderAll();
+    }
+
+    function addRule(type) {
+      const spec = RULE_TYPES[type];
+      if (!spec) return;
+      const params = makeDefaultParams(spec);
+      // Auto-bind to the first available detector. If none exist, the rule
+      // shows a "needs a detector" warning until the user adds one.
+      const firstDet = modules.find(m => isDetector(m.type));
+      if (firstDet && params.detector === null) params.detector = firstDet.id;
+      modules.push({
+        id: newRuleId(),
+        type,
+        params,
+        zones: [...spec.defaultZones],
+      });
+      renderAll();
+    }
+
+    function deleteModule(id) {
+      const i = modules.findIndex(m => m.id === id);
+      if (i < 0) return;
+      // If we deleted a detector, null out any rule that referenced it so
+      // the UI surfaces the broken link instead of silently misfiring.
+      if (isDetector(modules[i].type)) {
+        for (const m of modules) {
+          if (isRule(m.type) && m.params.detector === id) m.params.detector = null;
+        }
+      }
+      modules.splice(i, 1);
+      renderAll();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Rendering — canvas
+    // ═══════════════════════════════════════════════════════════════════════
+    function renderCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const lw = Math.max(2, Math.round(canvas.width / 640));
+      const fs = Math.max(12, Math.round(canvas.width / 80));
+      ctx.font = `${fs}px ui-monospace, monospace`;
+      ctx.textBaseline = "bottom";
+
+      for (const z of zones) {
+        const sel = z.id === selectedZoneId;
+        ctx.lineWidth = sel ? lw + 1 : lw;
+        ctx.strokeStyle = z.color;
+
+        if (z.kind === "line") {
+          ctx.beginPath();
+          ctx.moveTo(z.points[0].x, z.points[0].y);
+          ctx.lineTo(z.points[1].x, z.points[1].y);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = hexAlpha(z.color, sel ? 0.22 : 0.12);
+          drawPolygon(z.points, true);
+        }
+
+        for (const pt of z.points) drawVertex(pt, z.color, lw, z.editing);
+
+        // Lines: small A/B badges so the direction param's "A→B" is unambiguous.
+        if (z.kind === "line") {
+          drawEndpointLabel(z.points[0], "A", z.color, fs);
+          drawEndpointLabel(z.points[1], "B", z.color, fs);
+        }
+
+        const bb = bbox(z.points);
+        const text = z.name;
+        const tw = ctx.measureText(text).width + 8;
+        ctx.fillStyle = z.color;
+        ctx.fillRect(bb.x, Math.max(0, bb.y - fs - 4), tw, fs + 4);
+        ctx.fillStyle = "#0b0d10";
+        ctx.fillText(text, bb.x + 4, Math.max(fs, bb.y - 4));
+      }
+
+      // Detection boxes are NOT drawn here — they're burned into the MJPEG
+      // server-side. Zones (above) and the in-progress draft (below) are the
+      // only client-side overlays.
+
+      if (draft) {
+        ctx.lineWidth = lw;
+        ctx.strokeStyle = "#facc15";
+        ctx.fillStyle = "rgba(250,204,21,0.10)";
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(draft.points[0].x, draft.points[0].y);
+        for (let i = 1; i < draft.points.length; i++) ctx.lineTo(draft.points[i].x, draft.points[i].y);
+        if (hoverPt) ctx.lineTo(hoverPt.x, hoverPt.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        for (const pt of draft.points) drawVertex(pt, "#facc15", lw);
+        // First-vertex close affordance — polygon mode only.
+        if (draft.mode === "polygon" && draft.points.length >= 3 && hoverPt
+            && displayDist(hoverPt, draft.points[0]) < 10)
+          drawVertex(draft.points[0], "#22c55e", lw + 2, true);
+      }
+    }
+    function drawPolygon(pts, closed) {
+      if (pts.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      if (closed) ctx.closePath();
+      ctx.fill(); ctx.stroke();
+    }
+    function drawVertex(p, color, lw, big) {
+      const r = (big ? 7 : 4) + lw / 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      // Unlocked vertices: filled color = "grab me"; locked: dark fill + colored ring.
+      ctx.fillStyle    = big ? color    : "#0b0d10";
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, lw);
+      ctx.strokeStyle  = big ? "#0b0d10" : color;
+      ctx.stroke();
+    }
+    // Small filled badge next to a line endpoint ("A" / "B").
+    function drawEndpointLabel(p, text, color, fs) {
+      const labelFs = Math.max(11, Math.round(fs * 0.7));
+      const prevFont = ctx.font;
+      ctx.font = `bold ${labelFs}px ui-monospace, monospace`;
+      const w = ctx.measureText(text).width + 8;
+      const h = labelFs + 4;
+      const bx = p.x + 10;
+      const by = p.y - h / 2;
+      ctx.fillStyle = color;
+      ctx.fillRect(bx, by, w, h);
+      ctx.fillStyle = "#0b0d10";
+      ctx.fillText(text, bx + 4, by + h - 3);
+      ctx.font = prevFont;
+    }
+    function bbox(pts) {
+      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+    }
+    function hexAlpha(hex, a) {
+      const n = parseInt(hex.slice(1), 16);
+      return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Rendering — sidebar panels
+    // ═══════════════════════════════════════════════════════════════════════
+    function renderZones() {
+      document.getElementById("zoneCount").textContent = String(zones.length);
+      if (zones.length === 0) {
+        zonesEl.innerHTML = '<div class="empty">Draw a polygon or line to create a zone.</div>';
+        return;
+      }
+      zonesEl.innerHTML = "";
+      for (const z of zones) {
+        const card = document.createElement("div");
+        card.className = "card" + (z.id === selectedZoneId ? " selected" : "");
+
+        const kindBadge = z.kind === "line"
+          ? `<span class="kind-badge line">line</span>`
+          : `<span class="kind-badge polygon">polygon</span>`;
+
+        const editStyle = z.editing
+          ? "background:#1e40af; border-color:#2563eb; color:#e6e8eb;"
+          : "";
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="swatch" style="background:${z.color}"></div>
+            <div style="min-width:0;">
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input type="text" data-act="rename" value="${escapeAttr(z.name)}" style="flex:1; min-width:0;" />
+                ${kindBadge}
+              </div>
+              <div class="card-id" title="Click to copy UUID">
+                <span data-act="copyId" style="cursor:pointer; user-select:all; word-break:break-all;">${escapeHtml(z.id)}</span>
+              </div>
+            </div>
+            <div style="display:flex; gap:4px;">
+              <button data-act="edit" style="${editStyle}">${z.editing ? "Done" : "Edit"}</button>
+              <button data-act="del" class="danger">×</button>
+            </div>
+          </div>
+        `;
+
+        card.addEventListener("click", (e) => {
+          if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+          const act = e.target.dataset.act;
+          if (act === "del") { deleteZone(z.id); return; }
+          if (act === "edit") {
+            z.editing = !z.editing;
+            // Toggling edit cancels any in-progress draft to avoid mixed-mode confusion.
+            if (z.editing && draft) cancelDraft();
+            selectedZoneId = z.id;
+            renderAll();
+            return;
+          }
+          if (act !== "copyId") { selectedZoneId = z.id; renderAll(); }
+        });
+
+        const nameIn = card.querySelector('[data-act="rename"]');
+        nameIn.addEventListener("change", () => { z.name = nameIn.value.trim() || z.name; renderAll(); });
+
+        const uidEl = card.querySelector('[data-act="copyId"]');
+        uidEl.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(z.id);
+            const orig = uidEl.textContent;
+            uidEl.textContent = "copied!";
+            setTimeout(() => { uidEl.textContent = orig; }, 700);
+          } catch {}
+        });
+
+        zonesEl.appendChild(card);
+      }
+    }
+
+    function renderModules() {
+      renderModuleSection("detectorList", "detectorCount", m => isDetector(m.type),
+        'No detectors. Pick a type and click + Add. Rules need at least one detector to consume.');
+      renderModuleSection("ruleList",     "ruleCount",     m => isRule(m.type),
+        'No rules. Add a rule (e.g. Zone intrusion) and point it at a detector.');
+    }
+
+    function renderModuleSection(containerId, countId, predicate, emptyText) {
+      const items = modules.filter(predicate);
+      const countEl = document.getElementById(countId);
+      if (countEl) countEl.textContent = String(items.length);
+      const containerEl = document.getElementById(containerId);
+      if (!containerEl) return;
+      if (items.length === 0) {
+        containerEl.innerHTML = `<div class="empty">${escapeHtml(emptyText)}</div>`;
+        return;
+      }
+      containerEl.innerHTML = "";
+      for (const m of items) {
+        const spec = getSpec(m.type);
+        const card = document.createElement("div");
+        card.className = "card";
+
+        const paramRows = Object.entries(spec.params).map(([key, p]) => {
+          if (!paramApplies(p, m)) return "";
+          if (p.kind === "multi") {
+            const opts = getEffectiveOptions(p, m);
+            let hint = "";
+            if (p.source === "detector_classes") {
+              if (!m.params.detector) {
+                hint = `<div style="color:#f59e0b; font-size:11px; margin-top:2px;">⚠ assign a detector to see options</div>`;
+              } else if (opts.length === 0) {
+                hint = `<div style="color:#f59e0b; font-size:11px; margin-top:2px;">⚠ detector has no classes selected</div>`;
+              }
+            }
+            return `
+              <div class="field">
+                <label>${escapeHtml(p.label || key)}</label>
+                <div>
+                  <div class="chips" data-param="${key}">
+                    ${opts.map(opt => `
+                      <span class="chip intent ${m.params[key].includes(opt) ? "on" : ""}" data-val="${escapeAttr(opt)}">${escapeHtml(opt)}</span>
+                    `).join("")}
+                  </div>
+                  ${hint}
+                </div>
+              </div>
+            `;
+          }
+          if (p.kind === "number") {
+            return `
+              <div class="field">
+                <label>${escapeHtml(p.label || key)}</label>
+                <input type="number" data-num="${escapeAttr(key)}" value="${m.params[key]}"
+                       min="${p.min ?? 0}" max="${p.max ?? 999999}" step="${p.step ?? 1}"
+                       style="width:90px;" />
+              </div>
+            `;
+          }
+          if (p.kind === "select") {
+            return `
+              <div class="field">
+                <label>${escapeHtml(p.label || key)}</label>
+                <select data-sel="${escapeAttr(key)}">
+                  ${p.options.map(opt => `<option value="${escapeAttr(opt.value)}" ${m.params[key] === opt.value ? "selected" : ""}>${escapeHtml(opt.label || opt.value)}</option>`).join("")}
+                </select>
+              </div>
+            `;
+          }
+          if (p.kind === "text") {
+            return `
+              <div class="field">
+                <label>${escapeHtml(p.label || key)}</label>
+                <input type="text" data-txt="${escapeAttr(key)}" value="${escapeAttr(String(m.params[key] ?? ""))}" />
+              </div>
+            `;
+          }
+          if (p.kind === "detector_ref") {
+            const dets = modules.filter(x => isDetector(x.type));
+            if (dets.length === 0) {
+              return `
+                <div class="field">
+                  <label>${escapeHtml(p.label || key)}</label>
+                  <div style="color:#ef4444; font-size:11px;">⚠ no detector configured — add one above</div>
+                </div>
+              `;
+            }
+            const current = m.params[key];
+            return `
+              <div class="field">
+                <label>${escapeHtml(p.label || key)}</label>
+                <select data-sel="${escapeAttr(key)}">
+                  ${current && !dets.find(d => d.id === current)
+                    ? `<option value="" selected style="color:#ef4444;">⚠ ${escapeHtml(current)} (missing)</option>`
+                    : ''}
+                  ${dets.map(d => `<option value="${escapeAttr(d.id)}" ${current === d.id ? "selected" : ""}>${escapeHtml(d.id)} · ${escapeHtml(getSpec(d.type)?.label || d.type)}</option>`).join("")}
+                </select>
+              </div>
+            `;
+          }
+          return "";
+        }).join("");
+
+        const zoneChips = `
+          <div class="field">
+            <label>Zones</label>
+            <div class="chips" data-zones="1">
+              <span class="chip ${m.zones.includes("*") ? "on" : ""}" data-val="*">* whole frame</span>
+              ${zones.map(z => {
+                const badge = z.kind === "line" ? ` <span style="color:#93c5fd">line</span>` : "";
+                return `<span class="chip ${m.zones.includes(z.id) ? "on" : ""}" data-val="${escapeAttr(z.id)}" title="${escapeAttr(z.id)}">${escapeHtml(z.name)}${badge}</span>`;
+              }).join("")}
+            </div>
+          </div>
+        `;
+
+        card.innerHTML = `
+          <div class="card-header">
+            <div class="swatch" style="background:${spec.color}"></div>
+            <div>
+              <div>${escapeHtml(spec.label)} <span class="card-id">${escapeHtml(m.id)}</span></div>
+            </div>
+            <button data-act="del" class="danger">×</button>
+          </div>
+          <div class="card-body">
+            ${paramRows}
+            ${zoneChips}
+          </div>
+        `;
+
+        card.querySelector('[data-act="del"]').addEventListener("click", () => deleteModule(m.id));
+
+        card.querySelectorAll('[data-param]').forEach((group) => {
+          const key = group.dataset.param;
+          group.querySelectorAll(".chip").forEach((chip) => {
+            chip.addEventListener("click", () => {
+              const v = chip.dataset.val;
+              const arr = m.params[key];
+              const i = arr.indexOf(v);
+              if (i >= 0) arr.splice(i, 1); else arr.push(v);
+              renderAll();
+            });
+          });
+        });
+
+        card.querySelectorAll('[data-num]').forEach((input) => {
+          input.addEventListener("change", () => {
+            const v = Number(input.value);
+            if (Number.isFinite(v)) m.params[input.dataset.num] = v;
+            renderAll();
+          });
+        });
+
+        card.querySelectorAll('[data-sel]').forEach((sel) => {
+          sel.addEventListener("change", () => {
+            m.params[sel.dataset.sel] = sel.value;
+            renderAll();
+          });
+        });
+
+        card.querySelector('[data-zones]').querySelectorAll(".chip").forEach((chip) => {
+          chip.addEventListener("click", () => {
+            const v = chip.dataset.val;
+            if (v === "*") {
+              m.zones = m.zones.includes("*") ? [] : ["*"];
+            } else {
+              m.zones = m.zones.filter(z => z !== "*");
+              const i = m.zones.indexOf(v);
+              if (i >= 0) m.zones.splice(i, 1); else m.zones.push(v);
+            }
+            renderAll();
+          });
+        });
+
+        card.querySelectorAll('[data-txt]').forEach((input) => {
+          input.addEventListener("change", () => {
+            m.params[input.dataset.txt] = input.value;
+            renderAll();
+          });
+        });
+
+        containerEl.appendChild(card);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Config preview — live JSON
+    // ═══════════════════════════════════════════════════════════════════════
+    function buildModule(m) {
+      const spec = getSpec(m.type);
+      const out = { id: m.id, type: m.type };
+      if (!spec) return out;
+      for (const [k, p] of Object.entries(spec.params)) {
+        if (paramApplies(p, m)) out[k] = m.params[k];
+      }
+      if (isRule(m.type)) out.zones = [...m.zones];
+      return out;
+    }
+    function buildConfig() {
+      return {
+        camera: selectedCameraId,
+        image: { width: canvas.width || null, height: canvas.height || null },
+        zones: zones.map(z => ({
+          id: z.id,
+          name: z.name,
+          kind: z.kind,
+          points: z.points.map(p => [Math.round(p.x), Math.round(p.y)]),
+        })),
+        detectors: modules.filter(m => isDetector(m.type)).map(buildModule),
+        rules:     modules.filter(m => isRule(m.type)).map(buildModule),
+      };
+    }
+
+    function renderConfig() {
+      const cfg = buildConfig();
+      const json = JSON.stringify(cfg, null, 2);
+      configEl.innerHTML = highlightJson(json);
+      const bytes = new Blob([json]).size;
+      document.getElementById("configBytes").textContent =
+        bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    function highlightJson(s) {
+      return escapeHtml(s)
+        .replace(/("(?:\\.|[^"\\])*")(\s*:)/g, '<span class="k">$1</span>$2')
+        .replace(/:\s*("(?:\\.|[^"\\])*")/g, (m, g1) => `: <span class="s">${g1}</span>`)
+        .replace(/:\s*(-?\d+\.?\d*)/g, ': <span class="n">$1</span>')
+        .replace(/:\s*(true|false|null)/g, ': <span class="b">$1</span>')
+        .replace(/([\[\]\{\},])/g, '<span class="p">$1</span>');
+    }
+
+    function renderAll() {
+      renderCanvas(); renderZones(); renderModules(); renderConfig();
+      if (!suspendSave) scheduleSave();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   AI engine WebSocket — live detections + events
+    // ═══════════════════════════════════════════════════════════════════════
+    let _engineStatusFetchAt = 0;
+    async function pollEngineStatus() {
+      const now = Date.now();
+      if (now - _engineStatusFetchAt < 2000) return;
+      _engineStatusFetchAt = now;
+      try {
+        const r = await fetch("/api/engine/status");
+        if (!r.ok) return;
+        const s = await r.json();
+        const cs = (s.cameras || {})[selectedCameraId] || {};
+        const meta = document.getElementById("engineMeta");
+        if (!meta) return;
+        if (cs.idle === "disabled") {
+          meta.textContent = `${cs.device || "?"} · idle (camera disabled)`;
+        } else if (cs.idle === "no_modules") {
+          meta.textContent = `${cs.device || "?"} · idle (no modules)`;
+        } else if (!cs.yolo_running) {
+          meta.textContent = `${cs.device || "?"} · warming up…`;
+        } else {
+          meta.textContent = `${cs.device || "?"} · ${cs.fps_actual ?? 0} fps · ${cs.frames || 0} frames`;
+        }
+      } catch {}
+    }
+    function setEngineBadge(text, color) {
+      const el = document.getElementById("engineStatusBadge");
+      if (!el) return;
+      el.textContent = text;
+      el.style.background = color || "#1c2026";
+      el.style.color = color ? "#0b0d10" : "#8b94a1";
+    }
+
+    function connectEvents() {
+      // Tear down any prior socket — otherwise switchCamera() leaks streams.
+      if (_ws) { try { _ws.close(); } catch {} _ws = null; }
+
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const cameraArg = encodeURIComponent(selectedCameraId);
+      const ws = new WebSocket(`${proto}://${location.host}/ws/events?camera=${cameraArg}`);
+      _ws = ws;
+      ws.onopen  = () => { if (ws === _ws) { setEngineBadge("connected", "#22c55e"); pollEngineStatus(); } };
+      ws.onerror = () => { /* close will fire */ };
+      ws.onclose = () => {
+        if (ws !== _ws) return;        // stale close from a previous camera
+        setEngineBadge("offline", "#ef4444");
+        liveDetections = [];
+        renderCanvas();
+        setTimeout(() => { if (ws === _ws || _ws === null) connectEvents(); }, 1500);
+      };
+      ws.onmessage = (e) => {
+        if (ws !== _ws) return;
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { return; }
+        if (msg.type !== "frame") return;
+        if (msg.camera_id && msg.camera_id !== selectedCameraId) return;
+
+        // Detections are burned into the MJPEG by the engine; we only consume
+        // events here for the side panel + engine status polling.
+        for (const ev of (msg.events || [])) {
+          eventLog.unshift({ ...ev, ts: msg.ts });
+          recentEventByTrack.set(ev.track_id, msg.ts);
+        }
+        if (eventLog.length > 100) eventLog.length = 100;
+        renderEvents();
+        pollEngineStatus();
+      };
+    }
+
+    function zoneLabelById(id) {
+      const z = zones.find(z => z.id === id);
+      return z ? z.name : id.slice(0, 8);
+    }
+
+    function renderEvents() {
+      const el = document.getElementById("events");
+      if (!el) return;
+      if (eventLog.length === 0) {
+        el.innerHTML = '<div class="empty">No events yet. Add a module that targets a class the engine can detect (person, car, truck, bike).</div>';
+        return;
+      }
+      const nowS = Date.now() / 1000;
+      el.innerHTML = eventLog.slice(0, 60).map(e => {
+        const age = Math.max(0, (nowS - e.ts) | 0);
+        const sev = e.severity === "alert" ? "#ef4444"
+                  : e.severity === "warning" ? "#f59e0b"
+                  : "#60a5fa";
+        const dur   = e.duration_s ? ` <span style="color:#facc15">${e.duration_s}s</span>` : "";
+        const cross = e.crossing   ? ` <span style="color:#93c5fd">${e.crossing}</span>`   : "";
+        const zone  = e.zone_id    ? ` <span style="color:#8b94a1">in ${escapeHtml(zoneLabelById(e.zone_id))}</span>` : "";
+        return `<div style="padding:5px 7px; font: 11.5px/1.45 ui-monospace,monospace; color:#e6e8eb;
+                  border-left:2px solid ${sev}; margin-bottom:3px; background:#0e1115; border-radius:0 4px 4px 0;">
+                  <span style="color:${sev}; font-weight:600;">${escapeHtml(e.module_type)}</span>
+                  <span style="color:#6b7280">${escapeHtml(e.module_id)}</span>
+                  <span> · ${escapeHtml(e.class)} #${e.track_id}</span>${zone}${cross}${dur}
+                  <span style="float:right; color:#6b7280">${age}s</span>
+                </div>`;
+      }).join("");
+    }
+
+    // Slow tick — refresh "Xs ago" labels. No fast rAF loop needed: the
+    // detection boxes live inside the MJPEG and the canvas overlay only
+    // needs to redraw when zones change (handled by renderAll on mutations).
+    setInterval(renderEvents, 1000);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Multi-camera — list, switch, enable/disable, add
+    // ═══════════════════════════════════════════════════════════════════════
+    async function loadCameraList() {
+      try {
+        const r = await fetch("/api/cameras");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        cameras = await r.json();
+      } catch (e) {
+        console.error("loadCameraList failed:", e);
+        cameras = [];
+      }
+      renderCameraSelect();
+    }
+
+    function renderCameraSelect() {
+      const sel = document.getElementById("cameraSelect");
+      if (sel) {
+        sel.innerHTML = cameras.map(c => {
+          const tag = c.enabled ? "" : "  (disabled)";
+          const isSel = c.id === selectedCameraId ? " selected" : "";
+          return `<option value="${escapeAttr(c.id)}"${isSel}>${escapeHtml(c.name || c.id)}${tag}</option>`;
+        }).join("");
+      }
+      updateEnableButton();
+      renderCameraList();
+      renderCameraDetails();
+    }
+
+    function renderCameraList() {
+      const el = document.getElementById("cameraList");
+      const count = document.getElementById("cameraCount");
+      if (count) count.textContent = String(cameras.length);
+      if (!el) return;
+      if (cameras.length === 0) {
+        el.innerHTML = '<div class="empty">No cameras configured. Use “+ camera” to add one.</div>';
+        return;
+      }
+      el.innerHTML = cameras.map(c => {
+        const dotCls = c.enabled ? "on" : "off";
+        const selCls = c.id === selectedCameraId ? " selected" : "";
+        const zc = c.zone_count ?? 0;
+        const dc = c.detector_count ?? 0;
+        const rc = c.rule_count ?? 0;
+        // UUIDs are long; show the first segment in the secondary line, full
+        // value lives in the title tooltip and in the Camera details pane.
+        const shortId = String(c.id).split("-")[0] || c.id;
+        return `
+          <div class="cam-card${selCls}" data-cam="${escapeAttr(c.id)}" title="${escapeAttr(c.id)}">
+            <span class="cdot ${dotCls}" title="${c.enabled ? "enabled" : "disabled"}"></span>
+            <div>
+              <div style="font-weight:600;">${escapeHtml(c.name || c.id)}</div>
+              <div class="meta-line">${escapeHtml(shortId)} · ${zc} zone${zc===1?"":"s"} · ${dc} det · ${rc} rule${rc===1?"":"s"}</div>
+            </div>
+            <div class="actions">
+              <button data-act="del" class="danger" title="Delete camera">×</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      el.querySelectorAll(".cam-card").forEach(card => {
+        const cid = card.dataset.cam;
+        card.addEventListener("click", async (e) => {
+          if (e.target.dataset.act === "del") {
+            e.stopPropagation();
+            if (!confirm(`Delete camera "${cid}"? Zones and modules go too.`)) return;
+            try {
+              const r = await fetch(`/api/cameras/${encodeURIComponent(cid)}`, { method: "DELETE" });
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            } catch (err) { alert("Delete failed: " + err.message); return; }
+            await loadCameraList();
+            // If we just deleted the selected camera, jump to the first remaining one.
+            if (cid === selectedCameraId) {
+              const next = cameras[0]?.id;
+              if (next) await switchCamera(next);
+              else      renderAll();
+            }
+            return;
+          }
+          if (cid !== selectedCameraId) switchCamera(cid);
+        });
+      });
+    }
+
+    function renderCameraDetails() {
+      const el = document.getElementById("cameraDetails");
+      if (!el) return;
+      const c = cameras.find(c => c.id === selectedCameraId);
+      if (!c) { el.innerHTML = '<div class="empty">No camera selected.</div>'; return; }
+      const rows = [
+        ["id",          c.id],
+        ["name",        c.name || ""],
+        ["enabled",     c.enabled ? "yes" : "no"],
+        ["source",      c.source || ""],
+        ["resolution",  `${c.image_width || "?"}×${c.image_height || "?"}`],
+        ["zones",       String(c.zone_count ?? 0)],
+        ["detectors",   String(c.detector_count ?? 0)],
+        ["rules",       String(c.rule_count ?? 0)],
+      ];
+      el.innerHTML = rows.map(([k, v]) =>
+        `<div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(String(v))}</div>`
+      ).join("");
+    }
+
+    function updateEnableButton() {
+      const btn = document.getElementById("enableToggle");
+      if (!btn) return;
+      const cam = cameras.find(c => c.id === selectedCameraId);
+      if (!cam) { btn.textContent = "—"; btn.style.color = "#8b94a1"; return; }
+      btn.textContent = cam.enabled ? "● enabled" : "○ disabled";
+      btn.style.color = cam.enabled ? "#22c55e" : "#8b94a1";
+    }
+
+    async function toggleEnabled() {
+      const cam = cameras.find(c => c.id === selectedCameraId);
+      if (!cam) return;
+      const newEnabled = !cam.enabled;
+      try {
+        const r = await fetch(`/api/cameras/${encodeURIComponent(selectedCameraId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: newEnabled }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        cam.enabled = newEnabled;
+        updateEnableButton();
+        renderCameraSelect();
+      } catch (e) {
+        alert("Failed to toggle: " + e.message);
+      }
+    }
+
+    async function addCameraPrompt() {
+      const name = (prompt("Display name (e.g. Front entrance):") || "").trim();
+      if (!name) return;
+      const source = (prompt("Upstream RTSP URL (rtsp://host/path):") || "").trim();
+      if (!source) return;
+      let created;
+      try {
+        const r = await fetch("/api/cameras", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, source, image_width: 1280, image_height: 720 }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        created = await r.json();
+      } catch (e) {
+        alert("Create failed: " + e.message);
+        return;
+      }
+      alert(
+        `Camera "${name}" added.\nThe ai-engine spawns a worker automatically and\n` +
+        `publishes the annotated stream as MediaMTX path "${created.id}-annotated".`
+      );
+      await loadCameraList();
+      await switchCamera(created.id);
+    }
+
+    async function switchCamera(newId) {
+      if (!cameras.find(c => c.id === newId)) return;
+      selectedCameraId = newId;
+
+      // Block any auto-save until loadCamera() has rehydrated state.
+      // Otherwise the renderAll() below schedules a save with empty
+      // modules/zones that races with hydration and clobbers the DB.
+      suspendSave = true;
+      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+
+      // Persist the choice in the URL so reloads stay on the same camera.
+      const u = new URL(location.href);
+      u.searchParams.set("camera", newId);
+      history.replaceState(null, "", u);
+
+      // Reset all per-camera UI state.
+      zones.length = 0;
+      modules.length = 0;
+      liveDetections = [];
+      eventLog.length = 0;
+      recentEventByTrack.clear();
+      selectedZoneId = null;
+      draft = null;
+      hoverPt = null;
+      draggingVertex = null;
+      lastSavedJson = null;
+
+      renderCameraSelect();
+      renderAll();
+      renderEvents();
+      setEngineBadge("offline", "#1c2026");
+
+      // Reconnect transport (fire-and-forget) and reload server state.
+      startWHEP();
+      connectEvents();
+      await loadCamera();   // also resets suspendSave in its finally
+    }
+
+    async function bootMultiCamera() {
+      await loadCameraList();
+      const fromUrl = new URLSearchParams(location.search).get("camera");
+      const target =
+        (fromUrl && cameras.find(c => c.id === fromUrl)) ? fromUrl :
+        (cameras[0]?.id || "cam");
+      await switchCamera(target);
+    }
+
+    document.getElementById("cameraSelect").addEventListener("change", (e) => switchCamera(e.target.value));
+    document.getElementById("enableToggle").addEventListener("click", toggleEnabled);
+    document.getElementById("addCameraBtn").addEventListener("click", addCameraPrompt);
+    document.getElementById("addCameraBtn2")?.addEventListener("click", addCameraPrompt);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   View routing — #config / #stream
+    // ═══════════════════════════════════════════════════════════════════════
+    function setView(v) {
+      if (v !== "config" && v !== "stream") v = "config";
+      currentView = v;
+
+      document.getElementById("tabConfig").classList.toggle("active", v === "config");
+      document.getElementById("tabStream").classList.toggle("active", v === "stream");
+
+      // Show only the panes (and header bits) marked for the current view, or "both".
+      document.querySelectorAll("[data-view]").forEach((el) => {
+        const want = el.dataset.view;
+        el.style.display = (want === v || want === "both") ? "" : "none";
+      });
+
+      // The canvas is shared; tweak its cursor so stream view looks read-only.
+      canvas.style.cursor = (v === "stream") ? "default" : "crosshair";
+
+      // Cancel any in-progress draft when leaving config.
+      if (v !== "config") { draft = null; draggingVertex = null; }
+
+      renderCanvas();
+      renderEvents();
+    }
+
+    window.addEventListener("hashchange", () => {
+      setView(location.hash === "#stream" ? "stream" : "config");
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Server sync — load on boot, debounced PUT on every change
+    // ═══════════════════════════════════════════════════════════════════════
+    const saveStatusEl = document.getElementById("saveStatus");
+    function setSaveStatus(text, color) {
+      saveStatusEl.textContent = text;
+      saveStatusEl.style.color = color || "#8b94a1";
+    }
+
+    async function loadCamera() {
+      setSaveStatus("loading…");
+      suspendSave = true;
+      let remapped = false;
+      try {
+        const res = await fetch(`/api/cameras/${selectedCameraId}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const cam = await res.json();
+        remapped = hydrateFromConfig(cam);
+        if (remapped) {
+          // Old non-UUID IDs got upgraded — make sure the server picks up the new ones.
+          lastSavedJson = "";
+          setSaveStatus("migrating IDs…", "#f59e0b");
+        } else {
+          lastSavedJson = JSON.stringify(currentSavePayload());
+          setSaveStatus("saved", "#22c55e");
+        }
+      } catch (e) {
+        console.error("loadCamera failed:", e);
+        setSaveStatus("offline — local only", "#f59e0b");
+      } finally {
+        suspendSave = false;
+      }
+      if (remapped) scheduleSave();
+    }
+
+    // Returns true if any IDs were regenerated or shape was migrated — caller
+    // forces a save so the new shape lands in the DB on the next iteration.
+    function hydrateFromConfig(cam) {
+      zones.length = 0;
+      modules.length = 0;
+      selectedZoneId = null;
+
+      let migrationNeeded = false;
+      const idRemap = {};   // old non-UUID id → fresh UUID, used to fix refs
+
+      if (Array.isArray(cam.zones)) {
+        for (const z of cam.zones) {
+          let id = z.id;
+          if (!isUuid(id)) {
+            const fresh = newZoneId();
+            idRemap[id] = fresh;
+            id = fresh;
+            migrationNeeded = true;
+          }
+          const color = zonePalette[zones.length % zonePalette.length];
+          zones.push({
+            id,
+            name: z.name,
+            color,
+            kind: z.kind,
+            editing: false,
+            points: (z.points || []).map(pt =>
+              Array.isArray(pt) ? { x: pt[0], y: pt[1] } : { x: pt.x, y: pt.y }
+            ),
+          });
+        }
+        nextZoneNum = zones.length + 1;
+      }
+
+      // ── Detectors + Rules ────────────────────────────────────────────
+      // Any non-UUID id is regenerated; rule.detector refs are remapped to match.
+      const detectorsIn = Array.isArray(cam.detectors) ? cam.detectors : [];
+      const rulesIn     = Array.isArray(cam.rules)     ? cam.rules     : [];
+
+      const loadModule = (m) => {
+        const spec = getSpec(m.type);
+        if (!spec) return;
+        let id = m.id;
+        if (!isUuid(id)) {
+          const fresh = newUuid();
+          idRemap[id] = fresh;
+          id = fresh;
+          migrationNeeded = true;
+        }
+        const params = {};
+        for (const [k, p] of Object.entries(spec.params)) {
+          if (m[k] !== undefined) {
+            params[k] = Array.isArray(m[k]) ? [...m[k]] : m[k];
+          } else {
+            params[k] = (p.kind === "multi") ? [...p.default] : p.default;
+          }
+        }
+        const remappedZones = (Array.isArray(m.zones) ? m.zones : [])
+          .map(zid => idRemap[zid] || zid);
+        modules.push({ id, type: m.type, params, zones: remappedZones });
+      };
+
+      // Detectors first so rule.detector refs can be remapped immediately.
+      detectorsIn.forEach(loadModule);
+      rulesIn.forEach(loadModule);
+
+      // Rewrite any rule.detector that still points at a pre-remap detector id.
+      for (const m of modules) {
+        if (isRule(m.type) && m.params.detector && idRemap[m.params.detector]) {
+          m.params.detector = idRemap[m.params.detector];
+          migrationNeeded = true;
+        }
+      }
+
+      // Last-resort wiring: if any rule has no detector, create a default
+      // object_detection one and bind it.
+      const haveAnyRule   = modules.some(m => isRule(m.type));
+      let firstDetectorId = modules.find(m => isDetector(m.type))?.id || null;
+      if (haveAnyRule && !firstDetectorId) {
+        const spec = DETECTOR_TYPES.object_detection;
+        const detModule = {
+          id: newUuid(),
+          type: "object_detection",
+          params: makeDefaultParams(spec),
+          zones: [],
+        };
+        modules.unshift(detModule);
+        firstDetectorId = detModule.id;
+        migrationNeeded = true;
+      }
+      for (const m of modules) {
+        if (isRule(m.type) && !m.params.detector && firstDetectorId) {
+          m.params.detector = firstDetectorId;
+          migrationNeeded = true;
+        }
+      }
+
+      renderAll();
+      return migrationNeeded;
+    }
+
+    function currentSavePayload() {
+      const cfg = buildConfig();
+      return {
+        zones:        cfg.zones,
+        detectors:    cfg.detectors,
+        rules:        cfg.rules,
+        image_width:  cfg.image.width  ?? null,
+        image_height: cfg.image.height ?? null,
+      };
+    }
+
+    function scheduleSave() {
+      if (suspendSave) return;
+      // Cheap pre-check at schedule time — the real check happens at fire time
+      // so we always save whatever state is current then, not what was current
+      // when the save was first scheduled (that was a race during camera switch).
+      const previewJson = JSON.stringify(currentSavePayload());
+      if (previewJson === lastSavedJson) return;
+      if (saveTimer) clearTimeout(saveTimer);
+      const targetCamera = selectedCameraId;   // snapshot — don't follow a later switch
+      setSaveStatus("changes pending…", "#f59e0b");
+      saveTimer = setTimeout(async () => {
+        saveTimer = null;
+        // Bail if anything fundamental changed between scheduling and firing.
+        if (suspendSave) return;
+        if (selectedCameraId !== targetCamera) return;
+        const json = JSON.stringify(currentSavePayload());
+        if (json === lastSavedJson) {
+          setSaveStatus("saved", "#22c55e");
+          return;
+        }
+        setSaveStatus("saving…", "#f59e0b");
+        try {
+          const res = await fetch(`/api/cameras/${targetCamera}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: json,
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          lastSavedJson = json;
+          setSaveStatus("saved", "#22c55e");
+        } catch (e) {
+          console.error("save failed:", e);
+          setSaveStatus("save failed: " + e.message, "#ef4444");
+        }
+      }, 500);
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+    }
+    function escapeAttr(s) { return escapeHtml(s); }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Toolbar wiring
+    // ═══════════════════════════════════════════════════════════════════════
+    document.getElementById("finish").addEventListener("click", () => {
+      if (draft && draft.points.length >= minPointsFor(draft.mode)) commitDraft();
+    });
+    document.getElementById("cancel").addEventListener("click", cancelDraft);
+    document.getElementById("undo").addEventListener("click", () => {
+      if (!draft) return;
+      draft.points.pop();
+      if (draft.points.length === 0) draft = null;
+      renderCanvas();
+    });
+    document.getElementById("clearZones").addEventListener("click", () => {
+      if (!confirm("Remove all zones?")) return;
+      zones.length = 0; selectedZoneId = null;
+      for (const m of modules) m.zones = m.zones.filter(z => z === "*");
+      renderAll();
+    });
+    document.getElementById("addDetectorBtn").addEventListener("click", () => {
+      addDetector(document.getElementById("addDetectorType").value);
+    });
+    document.getElementById("addRuleBtn").addEventListener("click", () => {
+      addRule(document.getElementById("addRuleType").value);
+    });
+    document.getElementById("copyConfig").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(buildConfig(), null, 2));
+        const btn = document.getElementById("copyConfig");
+        const orig = btn.textContent;
+        btn.textContent = "Copied!";
+        setTimeout(() => (btn.textContent = orig), 900);
+      } catch (e) { alert("Clipboard write failed: " + e.message); }
+    });
+    document.getElementById("downloadConfig").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify(buildConfig(), null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `camera-config-${Date.now()}.json`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    document.getElementById("capture").addEventListener("click", async () => {
+      try {
+        const off = document.createElement("canvas");
+        off.width = canvas.width; off.height = canvas.height;
+        const c = off.getContext("2d");
+        c.drawImage(video, 0, 0, off.width, off.height);
+        c.drawImage(canvas, 0, 0);
+        const blob = await new Promise((r) => off.toBlob(r, "image/jpeg", 0.92));
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `frame-${Date.now()}.jpg`; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (err) { alert("Capture failed: " + err.message); }
+    });
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //   Boot
+    // ═══════════════════════════════════════════════════════════════════════
+    updateDrawHelp();
+    renderEvents();
+    setView(location.hash === "#stream" ? "stream" : "config");
+    bootMultiCamera();   // resolves the active camera, then calls loadCamera + startWHEP + connectEvents
+  </script>
+</body>
+</html>
