@@ -25,7 +25,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -35,7 +35,10 @@ from supervisor import Supervisor
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("ai-engine")
 
-PUBLIC_DIR = Path(__file__).resolve().parent.parent / "public"
+# Built React app lives at web/dist. We serve it from FastAPI so the whole
+# stack runs on a single port in production: API, WebSocket, MJPEG, and the
+# SPA bundle all behind :8000. Dev mode uses Vite on :5175 with API proxy.
+WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 # Module-global state set up in lifespan.
 supervisor:   Supervisor | None             = None
@@ -226,5 +229,27 @@ def info() -> dict:
     return {"cameras": cams[:1]}
 
 
-# ── Static viewer (mounted last) ────────────────────────────────────────────
-app.mount("/", StaticFiles(directory=str(PUBLIC_DIR), html=True), name="static")
+# ── Built React app (SPA) ──────────────────────────────────────────────────
+# Vite hashes asset filenames; serve the whole `assets/` dir verbatim with
+# correct Content-Type headers. Anything else falls through to the catch-all
+# below, which returns index.html so React Router can take over.
+if (WEB_DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    """SPA shell. Serves a real file if it exists in the build, otherwise
+    returns index.html so client-side routing can resolve the URL."""
+    if not WEB_DIST.is_dir():
+        raise HTTPException(404, "web build missing — run `cd web && npm run build`")
+    if full_path:
+        candidate = (WEB_DIST / full_path).resolve()
+        # Reject traversal attempts; only serve from inside WEB_DIST.
+        try:
+            candidate.relative_to(WEB_DIST.resolve())
+        except ValueError:
+            raise HTTPException(404)
+        if candidate.is_file():
+            return FileResponse(candidate)
+    return FileResponse(WEB_DIST / "index.html")
