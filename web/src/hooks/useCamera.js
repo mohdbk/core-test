@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import {
   DETECTOR_TYPES, RULE_TYPES, getSpec, isDetector, isRule, makeDefaultParams, newUuid,
 } from "../registry.js";
+import { useModels } from "./useModels.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (s) => typeof s === "string" && UUID_RE.test(s);
@@ -15,6 +16,7 @@ export function useCamera(cameraId) {
   const [zones, setZones]     = useState([]);
   const [modules, setModules] = useState([]);     // flat list, detectors + rules
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | loading | saving | saved | error | offline
+  const { models } = useModels();
 
   const suspendRef = useRef(true);     // block autosave during initial load
   const lastSavedRef = useRef("");
@@ -77,6 +79,31 @@ export function useCamera(cameraId) {
     scheduleSave();
   }, [zones, modules, camera, scheduleSave]);
 
+  // Migrate detectors created before the models table existed: they store a
+  // bare weights string in `params.model` but no `model_id`. Once /api/models
+  // loads we map by weights_path and rewrite to model_id; auto-save persists.
+  useEffect(() => {
+    if (suspendRef.current || !models.length || !modules.length) return;
+    let dirty = false;
+    const migrated = modules.map((m) => {
+      if (!isDetector(m.type)) return m;
+      if (m.params.model_id) return m;
+      const legacy = m.params.model;
+      if (!legacy) return m;
+      const match = models.find((mm) =>
+        mm.weights_path === legacy
+        || mm.weights_path === `${legacy}.pt`
+        || mm.weights_path === `models/${legacy}.pt`
+        || mm.weights_path === `models/${legacy}`
+      );
+      if (!match) return m;
+      const { model: _drop, ...rest } = m.params;
+      dirty = true;
+      return { ...m, params: { ...rest, model_id: match.id } };
+    });
+    if (dirty) setModules(migrated);
+  }, [models, modules]);
+
   // ── Mutations ───────────────────────────────────────────────────────
   const addZone     = (z) => setZones((zs) => [...zs, z]);
   const updateZone  = (id, patch) =>
@@ -91,9 +118,17 @@ export function useCamera(cameraId) {
   const addDetector = (type) => {
     const spec = DETECTOR_TYPES[type];
     if (!spec) return;
+    const params = makeDefaultParams(spec);
+    // Default the model dropdown to the first installed model whose `kind`
+    // matches the detector type. Skips silently when no model is installed
+    // — the UI surfaces a hint and the user picks manually.
+    if (spec.modelKind && params.model_id == null) {
+      const m = (models || []).find((mm) => mm.kind === spec.modelKind);
+      if (m) params.model_id = m.id;
+    }
     setModules((ms) => [
       ...ms,
-      { id: newUuid(), type, params: makeDefaultParams(spec), zones: [] },
+      { id: newUuid(), type, params, zones: [] },
     ]);
   };
 
@@ -103,7 +138,16 @@ export function useCamera(cameraId) {
     setModules((ms) => {
       const params = makeDefaultParams(spec);
       const firstDet = ms.find((m) => isDetector(m.type));
-      if (firstDet && params.detector === null) params.detector = firstDet.id;
+      // Auto-default every detector_ref param to the first available detector
+      // so rules like unsafe_exit (vehicle_detector + person_detector) come up
+      // already wired to something usable.
+      if (firstDet) {
+        for (const [k, p] of Object.entries(spec.params)) {
+          if (p.kind === "detector_ref" && params[k] == null) {
+            params[k] = firstDet.id;
+          }
+        }
+      }
       return [...ms, { id: newUuid(), type, params, zones: [...spec.defaultZones] }];
     });
   };
@@ -116,12 +160,23 @@ export function useCamera(cameraId) {
       const removed = ms.find((m) => m.id === id);
       let next = ms.filter((m) => m.id !== id);
       if (removed && isDetector(removed.type)) {
-        // Null out any rule that pointed at this detector.
-        next = next.map((m) =>
-          isRule(m.type) && m.params.detector === id
-            ? { ...m, params: { ...m.params, detector: null } }
-            : m,
-        );
+        // Null out every detector_ref param across all rules that pointed
+        // at this detector. Covers single-detector rules (`detector`) and
+        // multi-detector rules like unsafe_exit (`vehicle_detector`, …).
+        next = next.map((m) => {
+          if (!isRule(m.type)) return m;
+          const spec = RULE_TYPES[m.type];
+          if (!spec) return m;
+          const patched = { ...m.params };
+          let changed = false;
+          for (const [k, p] of Object.entries(spec.params)) {
+            if (p.kind === "detector_ref" && patched[k] === id) {
+              patched[k] = null;
+              changed = true;
+            }
+          }
+          return changed ? { ...m, params: patched } : m;
+        });
       }
       return next;
     });
@@ -161,6 +216,16 @@ function hydrate(cam) {
       points: (z.points || []).map((pt) =>
         Array.isArray(pt) ? { x: pt[0], y: pt[1] } : { x: pt.x, y: pt.y },
       ),
+      // Optional safety-rule calibration. Null = unset; rules that need them
+      // (speed_enforcement, polygon wrong_way) will skip the zone instead.
+      scale_px_per_m:        z.scale_px_per_m        ?? null,
+      allowed_direction_deg: z.allowed_direction_deg ?? null,
+      // 4-point ground homography (preferred over scale_px_per_m when set):
+      // the polygon's 4 vertices map to a real-world rectangle of the given
+      // width × height (meters).
+      use_homography:        !!z.use_homography,
+      ground_w_m:            z.ground_w_m ?? null,
+      ground_h_m:            z.ground_h_m ?? null,
     };
   });
 
@@ -233,6 +298,11 @@ function toPayload(zones, modules, camera) {
     zones: zones.map((z) => ({
       id: z.id, name: z.name, kind: z.kind, color: z.color,
       points: z.points.map((p) => [Math.round(p.x), Math.round(p.y)]),
+      scale_px_per_m:        z.scale_px_per_m        ?? null,
+      allowed_direction_deg: z.allowed_direction_deg ?? null,
+      use_homography:        !!z.use_homography,
+      ground_w_m:            z.ground_w_m ?? null,
+      ground_h_m:            z.ground_h_m ?? null,
     })),
     detectors: modules.filter((m) => isDetector(m.type)).map(buildModule),
     rules:     modules.filter((m) => isRule(m.type)).map(buildModule),

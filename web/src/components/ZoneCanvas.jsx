@@ -21,6 +21,8 @@ export default function ZoneCanvas({
   onAddZone, onUpdateZone, onRemoveZone,
   selectedZoneId, onSelectZone,
   editable = true,
+  drawLocked = true,
+  onCancelDraft,
 }) {
   const svgRef = useRef(null);
   const [draft, setDraft] = useState(null);        // {points, mode}
@@ -46,11 +48,15 @@ export default function ZoneCanvas({
   }
 
   // ── Background click: draw or deselect ─────────────────────────────────
+  // When `drawLocked`, a background click only deselects — drawing a new
+  // shape requires the user to explicitly Unlock first. Prevents the
+  // common "I clicked the stream and accidentally started a polygon" UX.
   function backgroundDown(e) {
     if (!editable || e.button !== 0) return;
     const p = toNative(e);
     if (!draft) {
       if (selected) { setSelected(null); return; }
+      if (drawLocked) { setSelected(null); return; }
       setDraft({ points: [p], mode: drawMode });
       return;
     }
@@ -62,6 +68,16 @@ export default function ZoneCanvas({
     if (draft.mode === "line" && pts.length >= 2) { commitWith(pts); return; }
     setDraft({ ...draft, points: pts });
   }
+
+  // Lock arriving while a draft is in progress: discard the draft so
+  // re-locking is a clean cancel-and-disarm.
+  useEffect(() => {
+    if (drawLocked && draft) {
+      setDraft(null);
+      onCancelDraft?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawLocked]);
 
   function commit()        { if (draft) commitWith(draft.points); }
   function commitWith(points) {
@@ -208,7 +224,7 @@ export default function ZoneCanvas({
       ref={svgRef}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="xMidYMid meet"
-      className={`absolute inset-0 w-full h-full ${editable ? "cursor-crosshair" : ""}`}
+      className={`absolute inset-0 w-full h-full ${editable && !drawLocked ? "cursor-crosshair" : ""}`}
       onPointerDown={backgroundDown}
       onPointerMove={pointerMove}
       onPointerUp={pointerUp}
@@ -314,7 +330,38 @@ function ZoneShape({ zone, selected, editable, onSelectBody, onEdgeDown, onVerte
           draggable
         />
       ))}
+      {zone.allowed_direction_deg != null && (
+        <DirectionArrow
+          center={centroid(zone.points)}
+          deg={zone.allowed_direction_deg}
+          color={stroke}
+        />
+      )}
       <ZoneLabel p={topLeft(zone.points)} text={zone.name} color={stroke} />
+    </g>
+  );
+}
+
+// Arrow rendered inside polygons whose rules care about a travel direction
+// (currently wrong_way). 0° = east, 90° = south (screen coordinates).
+function DirectionArrow({ center, deg, color }) {
+  const rad = (Number(deg) * Math.PI) / 180;
+  const len = 40;
+  const head = 9;
+  const tx = center.x + Math.cos(rad) * len;
+  const ty = center.y + Math.sin(rad) * len;
+  // Perpendicular for the arrowhead wings.
+  const pdx = -Math.sin(rad), pdy = Math.cos(rad);
+  const bx  = tx - Math.cos(rad) * head;
+  const by  = ty - Math.sin(rad) * head;
+  const lx  = bx + pdx * head * 0.6, ly = by + pdy * head * 0.6;
+  const rx  = bx - pdx * head * 0.6, ry = by - pdy * head * 0.6;
+  return (
+    <g pointerEvents="none" opacity="0.9">
+      <line x1={center.x} y1={center.y} x2={tx} y2={ty}
+            stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+      <polygon points={`${tx},${ty} ${lx},${ly} ${rx},${ry}`} fill={color} />
+      <circle cx={center.x} cy={center.y} r="3" fill={color} />
     </g>
   );
 }
@@ -379,6 +426,12 @@ function topLeft(pts) {
   let x = Infinity, y = Infinity;
   for (const p of pts) { if (p.x < x) x = p.x; if (p.y < y) y = p.y; }
   return { x, y };
+}
+function centroid(pts) {
+  if (!pts || pts.length === 0) return { x: 0, y: 0 };
+  let sx = 0, sy = 0;
+  for (const p of pts) { sx += p.x; sy += p.y; }
+  return { x: sx / pts.length, y: sy / pts.length };
 }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function distPx(svg, a, b) {

@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { eventsWsUrl } from "../api.js";
 
-// Subscribes to the per-camera WebSocket and returns a rolling event log +
-// connection status. Detection boxes themselves are server-burned into the
-// MJPEG/RTSP stream, so we only consume `events` here.
+// Subscribes to the per-camera WebSocket and decodes the backend's lifecycle
+// events into two streams the UI cares about:
+//
+//   active  — events currently firing (enter / update phases). Keyed by
+//             (module_id, track_id, zone_id, sub) so the UI can render one
+//             live row per ongoing alert with a running duration.
+//   history — completed events (exit phase) plus one-shot alerts that have
+//             no lifecycle (line crossings, falls, unsafe-exit transitions).
+//
+// Backwards compatible with the old "no phase field" shape — those events
+// land in history directly.
 export function useEvents(cameraId) {
-  const [events, setEvents] = useState([]);
-  const [status, setStatus] = useState("offline"); // offline | connecting | connected
+  const [active, setActive]   = useState(new Map());
+  const [history, setHistory] = useState([]);
+  const [status, setStatus]   = useState("offline");
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -18,7 +27,7 @@ export function useEvents(cameraId) {
       setStatus("connecting");
       const ws = new WebSocket(eventsWsUrl(cameraId));
       wsRef.current = ws;
-      ws.onopen = () => { if (!cancelled) setStatus("connected"); };
+      ws.onopen  = () => { if (!cancelled) setStatus("connected"); };
       ws.onclose = () => {
         if (cancelled) return;
         setStatus("offline");
@@ -32,8 +41,30 @@ export function useEvents(cameraId) {
         if (msg.type !== "frame") return;
         const evs = msg.events || [];
         if (!evs.length) return;
-        setEvents((prev) => {
-          const next = [...evs.map((ev) => ({ ...ev, ts: msg.ts })), ...prev];
+
+        setActive((prev) => {
+          let next = prev;
+          for (const ev of evs) {
+            const phase = ev.phase;
+            if (phase !== "enter" && phase !== "update" && phase !== "exit") continue;
+            const k = eventKey(ev);
+            if (next === prev) next = new Map(prev);
+            if (phase === "exit") next.delete(k);
+            else next.set(k, { ...ev, ts: msg.ts });
+          }
+          return next;
+        });
+
+        setHistory((prev) => {
+          let next = prev;
+          const additions = [];
+          for (const ev of evs) {
+            const phase = ev.phase;
+            if (phase === "enter" || phase === "update") continue;
+            additions.push({ ...ev, ts: msg.ts });
+          }
+          if (!additions.length) return prev;
+          next = [...additions, ...prev];
           if (next.length > 100) next.length = 100;
           return next;
         });
@@ -46,5 +77,14 @@ export function useEvents(cameraId) {
     };
   }, [cameraId]);
 
-  return { events, status };
+  return { active, history, status };
+}
+
+function eventKey(ev) {
+  return [
+    ev.module_id || "?",
+    ev.track_id  ?? "?",
+    ev.zone_id   || "",
+    ev.missing   || "",
+  ].join("|");
 }

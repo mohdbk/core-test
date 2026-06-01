@@ -1,18 +1,31 @@
 import {
-  Activity, Box, Eye, HardHat, Layers, Shield, ShieldAlert, Target, Trash2,
+  Activity, AlertTriangle, ArrowLeftRight, Ban, Box, Eye, Gauge, HardHat,
+  Layers, LogOut, PauseCircle, Shield, ShieldAlert, Sparkles, Target, Trash2, UserCheck,
 } from "lucide-react";
 import {
   DETECTOR_TYPES, RULE_TYPES, effectiveOptions, getSpec, isDetector, isRule, paramApplies,
 } from "../registry.js";
+import { classLabel } from "../lib/labels.js";
 import IconButton from "./IconButton.jsx";
 
 // Iconography by module type.
 const TYPE_ICON = {
+  // detectors
   object_detection: Box,
   ppe_detection:    HardHat,
+  pose_detection:   Sparkles,
+  // original rules
   intrusion:        ShieldAlert,
   presence:         Eye,
   ppe_compliance:   Shield,
+  // new safety rules
+  restricted_zone:  Ban,
+  idle_vehicle:     PauseCircle,
+  speed_enforcement: Gauge,
+  wrong_way:        ArrowLeftRight,
+  lone_worker:      UserCheck,
+  unsafe_exit:      LogOut,
+  trip_fall:        AlertTriangle,
 };
 const COLOR_RING = {
   cyan:   "from-cyan-400/30 to-cyan-500/10  text-cyan-400  border-cyan-400/30",
@@ -21,7 +34,7 @@ const COLOR_RING = {
   lime:   "from-lime-400/30 to-lime-500/10  text-lime-400  border-lime-400/30",
 };
 
-export default function ModuleCard({ module, modules, zones, onUpdate, onRemove }) {
+export default function ModuleCard({ module, modules, zones, models = [], onUpdate, onRemove }) {
   const spec = getSpec(module.type);
   if (!spec) return null;
   const color = spec.color || "cyan";
@@ -83,6 +96,7 @@ export default function ModuleCard({ module, modules, zones, onUpdate, onRemove 
               value={module.params[key]}
               modules={modules}
               detectors={detectors}
+              models={models}
               onMultiToggle={(val) => toggleChip(key, val, true)}
               onValue={(val) => setParam(key, val)}
               module={module}
@@ -124,16 +138,20 @@ export default function ModuleCard({ module, modules, zones, onUpdate, onRemove 
   );
 }
 
-function ParamField({ paramKey, paramSpec, value, modules, detectors, onMultiToggle, onValue, module }) {
+function ParamField({ paramKey, paramSpec, value, modules, detectors, models, onMultiToggle, onValue, module }) {
   const p = paramSpec;
 
   if (p.kind === "multi") {
-    const opts = effectiveOptions(p, module, modules);
-    const hint = p.source === "detector_classes" && !module.params.detector
-      ? "assign a detector to see options"
-      : p.source === "detector_classes" && opts.length === 0
-      ? "detector has no classes selected"
-      : null;
+    const opts = effectiveOptions(p, module, modules, models);
+    const ref = p.from || "detector";
+    let hint = null;
+    if (p.source === "detector_classes") {
+      if (!module.params[ref]) hint = `assign a ${ref.replace(/_/g, " ")} to see options`;
+      else if (opts.length === 0) hint = "detector has no classes selected";
+    } else if (p.source === "model_classes") {
+      if (!module.params.model_id) hint = "assign a model to see options";
+      else if (opts.length === 0) hint = "model has no classes registered";
+    }
     return (
       <div className="space-y-1.5">
         <div className="label">{p.label}</div>
@@ -142,9 +160,10 @@ function ParamField({ paramKey, paramSpec, value, modules, detectors, onMultiTog
             <button
               key={opt}
               onClick={() => onMultiToggle(opt)}
+              title={opt}
               className={`chip ${(value || []).includes(opt) ? "chip-on" : ""}`}
             >
-              {opt}
+              {classLabel(opt)}
             </button>
           ))}
         </div>
@@ -199,6 +218,43 @@ function ParamField({ paramKey, paramSpec, value, modules, detectors, onMultiTog
           onChange={(e) => onValue(e.target.value)}
           className="input font-mono"
         />
+      </div>
+    );
+  }
+
+  if (p.kind === "model_ref") {
+    const matching = (models || []).filter((m) => !p.forKind || m.kind === p.forKind);
+    if (matching.length === 0) {
+      return (
+        <div className="space-y-1.5">
+          <div className="label">{p.label}</div>
+          <div className="text-[11px] text-amber-400/90 inline-flex items-center gap-1">
+            <Activity size={10} strokeWidth={2.25} />
+            no {p.forKind || "matching"} model installed — register one via POST /api/models
+          </div>
+        </div>
+      );
+    }
+    const selected = matching.find((m) => m.id === value);
+    return (
+      <div className="space-y-1.5">
+        <div className="label">{p.label}</div>
+        <select
+          value={value ?? ""}
+          onChange={(e) => onValue(e.target.value || null)}
+          className="input"
+          title={selected?.description || ""}
+        >
+          {!value && <option value="">— select a model —</option>}
+          {matching.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}{m.builtin ? "" : " · custom"}
+            </option>
+          ))}
+        </select>
+        {selected?.description && (
+          <div className="text-[11px] text-subtle/80 leading-snug">{selected.description}</div>
+        )}
       </div>
     );
   }

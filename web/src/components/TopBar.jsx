@@ -1,93 +1,130 @@
-import { Eye, SlidersHorizontal } from "lucide-react";
-import { Link, NavLink, useLocation, useNavigate, useParams } from "react-router-dom";
+import {
+  Cpu, Gauge, Layers, MonitorPlay, ShieldAlert, SlidersHorizontal, Video,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { NavLink } from "react-router-dom";
 import { useCameras } from "../hooks/useCameras.js";
-import CameraSwitcher from "./CameraSwitcher.jsx";
+import { useEngineStatus } from "../hooks/useEngineStatus.js";
+import Brand from "./Brand.jsx";
+import KPI from "./KPI.jsx";
+import StatusDot from "./StatusDot.jsx";
+import Tooltip from "./Tooltip.jsx";
 
-export default function TopBar() {
-  const { cameras, refresh } = useCameras();
-  const params = useParams();
-  const loc = useLocation();
-  const nav = useNavigate();
+// Operations Console top bar. One row: brand · view tabs · live lamp ·
+// KPI strip · version. Replaces the old NavRail + ContextBar split.
+export default function TopBar({ cameraId, activeIncidentCount = 0 }) {
+  const { status }  = useEngineStatus(cameraId);
+  const { cameras } = useCameras();
 
-  const isStream = loc.pathname.startsWith("/stream");
-  const viewPrefix = isStream ? "/stream" : "/config";
-  const currentCameraId = params.cameraId || cameras[0]?.id;
+  // 30-sample FPS sparkline (1 Hz). Throws away the read in steady state
+  // when nothing has changed — keeps the line live without filling memory.
+  const [series, setSeries] = useState([]);
+  const ref = useRef(series); ref.current = series;
+  useEffect(() => {
+    const t = setInterval(() => {
+      const v = Number(status?.fps_actual ?? 0);
+      setSeries([...ref.current, v].slice(-30));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [status?.fps_actual]);
 
-  function switchTo(id) {
-    nav(`${viewPrefix}/${id}`);
-  }
+  const totalDet = cameras.reduce((a, c) => a + (c.detector_count || 0), 0);
+  const totalRul = cameras.reduce((a, c) => a + (c.rule_count     || 0), 0);
+  const live = !status?.idle && !status?.warming;
 
   return (
-    <header className="px-4 pt-3 pb-2">
-      <div className="surface rounded-xl px-3 py-2 flex items-center gap-3">
-        <Link
-          to="/config"
-          className="flex items-center gap-2.5 pr-3 mr-1 border-r border-white/5"
-        >
-          <Logo />
-          <div className="leading-tight">
-            <div className="text-[13px] font-semibold tracking-tight">tanbeeh</div>
-            <div className="text-[9px] uppercase tracking-[0.18em] text-subtle/70 font-medium">
-              vision intel
-            </div>
-          </div>
-        </Link>
+    <header className="h-14 flex items-stretch border-b border-white/[.06] bg-[var(--surface-1)]/95 backdrop-blur-xl">
+      <div className="flex items-center pl-4 pr-3 border-r border-white/[.05]">
+        <Brand />
+      </div>
 
-        <nav className="flex items-center gap-1">
-          <Tab to={`/config${currentCameraId ? "/" + currentCameraId : ""}`} icon={SlidersHorizontal}>
-            Configure
-          </Tab>
-          <Tab to={`/stream${currentCameraId ? "/" + currentCameraId : ""}`} icon={Eye}>
-            Stream
-          </Tab>
-        </nav>
+      <ViewTabs cameraId={cameraId} />
 
-        <div className="flex-1" />
-
-        <CameraSwitcher
-          cameras={cameras}
-          currentId={currentCameraId}
-          onSelect={switchTo}
-          onCameraAdded={refresh}
+      <div className="flex-1 flex items-stretch overflow-x-auto">
+        <Divider />
+        <LiveLamp warming={status?.warming} idle={status?.idle} />
+        <Divider />
+        <KPI icon={Video}             label="Cameras"   value={cameras.length} tone="info" />
+        <Divider />
+        <KPI icon={Layers}            label="Detectors" value={totalDet} tone="info" />
+        <Divider />
+        <KPI icon={SlidersHorizontal} label="Rules"     value={totalRul} tone="info" />
+        <Divider />
+        <KPI
+          icon={ShieldAlert}
+          label="Live Alerts"
+          value={activeIncidentCount}
+          tone={activeIncidentCount > 0 ? "alert" : "neutral"}
         />
+        <Divider />
+        <KPI
+          icon={Gauge}
+          label="FPS"
+          value={Number(status?.fps_actual ?? 0)}
+          series={series}
+          tone={live ? "live" : "neutral"}
+          format={(v) => v.toFixed(1)}
+        />
+        <Divider />
+        <KPI icon={Cpu} label="Device" value={(status?.device || "—").toUpperCase()} tone="neutral" />
+      </div>
+
+      <div className="flex items-center gap-2 px-4 border-l border-white/[.05]">
+        <span className="text-[10px] tracking-wider uppercase text-text/40 font-mono">v0.3</span>
       </div>
     </header>
   );
 }
 
-function Tab({ to, icon: Icon, children }) {
+function Divider() {
+  return <div className="self-stretch w-px bg-white/[.05]" />;
+}
+
+function ViewTabs({ cameraId }) {
+  const suffix = cameraId ? `/${cameraId}` : "";
+  return (
+    <nav className="flex items-stretch border-r border-white/[.05]">
+      <Tab to={`/console${suffix}`} icon={MonitorPlay}        label="Console" />
+      <Tab to={`/config${suffix}`}  icon={SlidersHorizontal} label="Configure" />
+    </nav>
+  );
+}
+
+function Tab({ to, icon: Icon, label }) {
   return (
     <NavLink
       to={to}
       className={({ isActive }) =>
         [
-          "inline-flex items-center gap-1.5 h-7 px-2.5 text-xs font-medium rounded-md transition-colors",
-          isActive
-            ? "text-text bg-white/[.07] shadow-[inset_0_0_0_1px_rgba(255,255,255,.08)]"
-            : "text-subtle hover:text-text hover:bg-white/[.04]",
+          "relative flex items-center gap-1.5 px-4 text-[12px] font-medium transition-colors",
+          isActive ? "text-cyan-300" : "text-text/55 hover:text-text",
         ].join(" ")
       }
     >
-      <Icon size={13} strokeWidth={1.75} />
-      {children}
+      {({ isActive }) => (
+        <>
+          <Icon size={13} strokeWidth={1.75} />
+          {label}
+          {isActive && (
+            <span className="absolute bottom-0 left-2 right-2 h-[2px] rounded-t bg-gradient-to-r from-cyan-400 to-violet-400 shadow-[0_0_12px_rgba(34,211,238,.55)]" />
+          )}
+        </>
+      )}
     </NavLink>
   );
 }
 
-function Logo() {
+function LiveLamp({ warming, idle }) {
+  const tone  = warming ? "warn" : idle ? "neutral" : "live";
+  const label = warming ? "Warming" : idle ? `Idle · ${idle}` : "Live";
   return (
-    <div className="relative w-7 h-7 grid place-items-center rounded-md bg-gradient-to-br from-cyan-400/20 to-violet-500/20 border border-white/10">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="9" stroke="url(#lg)" strokeWidth="1.6" />
-        <circle cx="12" cy="12" r="3.5" stroke="url(#lg)" strokeWidth="1.6" />
-        <circle cx="12" cy="12" r="1.4" fill="#22d3ee" />
-        <defs>
-          <linearGradient id="lg" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#22d3ee" />
-            <stop offset="1" stopColor="#a78bfa" />
-          </linearGradient>
-        </defs>
-      </svg>
-    </div>
+    <Tooltip label={`Engine ${label.toLowerCase()}`} side="bottom">
+      <div className="flex items-center gap-2 px-3 whitespace-nowrap">
+        <StatusDot tone={tone} pulse={!idle} />
+        <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-text font-semibold">
+          {label}
+        </span>
+      </div>
+    </Tooltip>
   );
 }

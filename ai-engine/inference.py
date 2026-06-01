@@ -18,13 +18,17 @@ config edit propagates within ~200ms.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import cv2
+import numpy as np
 
 import shutil
 import subprocess
@@ -244,6 +248,15 @@ class InferenceEngine:
         # Loading on demand means a detector can be added/removed at runtime
         # without restarting the worker.
         self._models: dict[str, Any] = {}
+        # Per-model lock so the thread pool can run two different models
+        # concurrently but never race two threads against the same YOLO
+        # instance's internal tracker state.
+        self._model_locks: dict[str, threading.Lock] = {}
+        self._model_locks_guard = threading.Lock()
+        # model_id → weights_path lookup cache to avoid hitting SQLite every
+        # frame. Cleared by engine restart only — model rows are effectively
+        # immutable for the purposes of inference (rename/description only).
+        self._mid_to_path: dict[str, str | None] = {}
 
         # Annotated JPEG ring of one — the latest frame with bboxes drawn on it.
         # Powers the /api/cameras/{id}/stream.mjpg endpoint (snapshots,
@@ -262,11 +275,35 @@ class InferenceEngine:
         )
         self._publisher = FFmpegPublisher(publish_url, fps=target_fps)
 
+        # Per-detector signature ("which model + which classes are loaded?").
+        # When this changes for a detector, YOLO's internal tracker would
+        # renumber tracks under us — we drop the model from cache so the
+        # next inference reloads it cleanly and reset the rule evaluator's
+        # per-track state so we don't carry over stale dwell timers.
+        self._detector_sigs: dict[str, str] = {}
+
+        # Camera-config cache. Read `cameras.updated_at` every frame (cheap,
+        # one row); only refetch the full normalized tree when it changes.
+        # Saves ~3 SQLite queries per frame in steady state.
+        self._cached_config: dict | None = None
+        self._cached_config_ts: str | None = None
+
+        # Models that have completed a warm-up forward pass. First-call
+        # latency on MPS/CUDA can be 1-2 s; we burn that cost up front so
+        # the first user-visible frame doesn't look broken.
+        self._warmed: set[str] = set()
+
+        # Thread pool used to parallelize multi-detector inference. YOLO
+        # releases the GIL during model.track(), so threading actually
+        # parallelizes on MPS/CUDA.
+        self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix=f"infer-{camera_id}")
+
         self.status: dict[str, Any] = {
             "camera_id":     camera_id,
             "running":       False,
             "yolo_running":  False,
             "idle":          None,   # "disabled" | "no_detectors" | "no_rules" | None
+            "warming":       False,
             "device":        None,
             "fps_target":    target_fps,
             "fps_actual":    0.0,
@@ -297,6 +334,7 @@ class InferenceEngine:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=3.0)
+        self._pool.shutdown(wait=False, cancel_futures=True)
         self.status["running"] = False
 
     # ── Worker ───────────────────────────────────────────────────────────
@@ -321,7 +359,7 @@ class InferenceEngine:
 
         while not self._stop.is_set():
             try:
-                config = db.get_camera(self.camera_id)
+                config = self._fetch_config()
             except Exception as e:
                 log.warning("config fetch failed: %s", e)
                 config = None
@@ -381,18 +419,40 @@ class InferenceEngine:
             imgsz = ((max(h, w) + 31) // 32) * 32
             self.status["imgsz"] = imgsz
 
-            # Run each detector → per-detector stream of detections.
+            # Detect signature changes (different model_id / classes / conf)
+            # so we can reset YOLO's internal tracker before the ID space
+            # gets stomped on.
+            self._handle_signature_changes(detectors)
+
+            # Warm-up: pay the first-inference cost (model load + device init)
+            # on a blank frame so the first real frame isn't visibly stalled.
+            self._maybe_warmup(detectors, device, imgsz)
+
+            # Run each detector → per-detector stream of detections. With
+            # multiple detectors we fan out across a thread pool; YOLO drops
+            # the GIL inside predict/track so this actually parallelizes.
             detections_by_detector: dict[str, list[dict]] = {}
             flat: list[dict] = []
             det_status: dict[str, dict] = {}
-            for det in detectors:
+            if len(detectors) <= 1:
+                results_pairs = [(d, self._run_detector(d, frame, device, imgsz)) for d in detectors]
+            else:
+                futs = [(d, self._pool.submit(self._run_detector, d, frame, device, imgsz)) for d in detectors]
+                results_pairs = []
+                for d, fut in futs:
+                    try:
+                        results_pairs.append((d, fut.result(timeout=10.0)))
+                    except Exception as e:
+                        log.warning("detector %s failed in pool: %s", d.get("id"), e)
+                        results_pairs.append((d, []))
+            for det, det_dets in results_pairs:
                 det_id = det.get("id", "?")
-                det_dets = self._run_detector(det, frame, device, imgsz)
                 detections_by_detector[det_id] = det_dets
                 det_status[det_id] = {
-                    "type":  det.get("type"),
-                    "model": det.get("model", "yolov8s"),
-                    "count": len(det_dets),
+                    "type":     det.get("type"),
+                    "model_id": det.get("model_id"),
+                    "model":    self._resolve_weights(det) or det.get("model"),
+                    "count":    len(det_dets),
                 }
                 for d in det_dets:
                     flat.append({**d, "detector_id": det_id})
@@ -435,10 +495,100 @@ class InferenceEngine:
             reader.shutdown()
         self._publisher.stop()
 
+    def _fetch_config(self) -> dict | None:
+        ts = db.get_camera_updated_at(self.camera_id)
+        if ts is None:
+            self._cached_config = None
+            self._cached_config_ts = None
+            return None
+        if ts != self._cached_config_ts:
+            self._cached_config = db.get_camera(self.camera_id)
+            self._cached_config_ts = ts
+        return self._cached_config
+
     def _set_idle(self, reason: str) -> None:
         self.status["idle"] = reason
         self.status["yolo_running"] = False
         self.status["detectors"] = {}
+
+    # ── Detector signature / warm-up ─────────────────────────────────────
+
+    def _detector_signature(self, det: dict) -> str:
+        payload = {
+            "model_id": det.get("model_id"),
+            "model":    det.get("model"),
+            "min_conf": det.get("min_conf"),
+            "classes":  sorted(det.get("classes") or []),
+            "type":     det.get("type"),
+        }
+        return hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+
+    def _handle_signature_changes(self, detectors: list[dict]) -> None:
+        changed = False
+        for det in detectors:
+            det_id = det.get("id")
+            if not det_id:
+                continue
+            sig = self._detector_signature(det)
+            prev = self._detector_sigs.get(det_id)
+            if prev is not None and prev != sig:
+                log.info("detector %s signature changed; resetting tracker", det_id)
+                changed = True
+                # Best-effort tracker reset on the loaded YOLO instance. If
+                # ultralytics changes its tracker API, we fall through to a
+                # full evaluator reset below — track IDs may renumber but
+                # state stays consistent.
+                path = self._resolve_weights(det)
+                if path:
+                    key = path if path.endswith(".pt") else f"{path}.pt"
+                    candidate = _ENGINE_DIR / "models" / key
+                    for resolved in (key, str(candidate.resolve())):
+                        model = self._models.get(resolved)
+                        if model is None:
+                            continue
+                        try:
+                            predictor = getattr(model, "predictor", None)
+                            for t in getattr(predictor, "trackers", []) or []:
+                                t.reset()
+                        except Exception as e:
+                            log.warning("tracker reset failed: %s", e)
+            self._detector_sigs[det_id] = sig
+        if changed:
+            self.evaluator.reset()
+            self.status["last_error"] = None
+            log.info("evaluator state reset after detector signature change")
+
+    def _maybe_warmup(self, detectors: list[dict], device: str, imgsz: int) -> None:
+        """Run one inference per unique model on a black `imgsz`-sized frame
+        to amortize the first-call latency (model load + device init)."""
+        unique_paths: list[tuple[str, Any]] = []
+        for det in detectors:
+            path = self._resolve_weights(det)
+            if not path:
+                continue
+            key = path if path.endswith(".pt") else f"{path}.pt"
+            warm_key = f"{key}@{imgsz}@{device}"
+            if warm_key in self._warmed:
+                continue
+            model = self._get_model(path)
+            if model is None:
+                continue
+            unique_paths.append((warm_key, model))
+        if not unique_paths:
+            return
+        self.status["warming"] = True
+        blank = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+        try:
+            for warm_key, model in unique_paths:
+                t0 = time.time()
+                try:
+                    model.predict(blank, device=device, verbose=False, imgsz=imgsz)
+                    self._warmed.add(warm_key)
+                    log.info("warmed %s in %.0f ms", warm_key, (time.time() - t0) * 1000)
+                except Exception as e:
+                    log.warning("warm-up failed for %s: %s", warm_key, e)
+        finally:
+            self.status["warming"] = False
 
     # ── MJPEG annotation ─────────────────────────────────────────────────
 
@@ -498,7 +648,7 @@ class InferenceEngine:
         return self._run_yolo(det, frame, device, imgsz)
 
     def _run_yolo(self, det: dict, frame: Any, device: str, imgsz: int) -> list[dict]:
-        model_name = det.get("model") or "yolov8s"
+        model_name = self._resolve_weights(det) or "yolov8s"
         model = self._get_model(model_name)
         if model is None:
             return []
@@ -518,15 +668,16 @@ class InferenceEngine:
             return []
 
         try:
-            results = model.track(
-                frame,
-                persist=True,
-                classes=cls_idxs or None,
-                device=device,
-                verbose=False,
-                conf=min_conf,
-                imgsz=imgsz,
-            )
+            with self._lock_for(model_name):
+                results = model.track(
+                    frame,
+                    persist=True,
+                    classes=cls_idxs or None,
+                    device=device,
+                    verbose=False,
+                    conf=min_conf,
+                    imgsz=imgsz,
+                )
         except Exception as e:
             log.exception("detector %s inference failed", det.get("id"))
             self.status["last_error"] = f"detector {det.get('id')}: {e}"
@@ -534,15 +685,52 @@ class InferenceEngine:
 
         return self._parse_results(results, names)
 
+    def _lock_for(self, model_name: str) -> threading.Lock:
+        with self._model_locks_guard:
+            lock = self._model_locks.get(model_name)
+            if lock is None:
+                lock = threading.Lock()
+                self._model_locks[model_name] = lock
+            return lock
+
+    def _resolve_weights(self, det: dict) -> str | None:
+        """Resolve a detector's chosen model to a weights path. Preference:
+        `model_id` → DB lookup → weights_path. Falls back to the legacy
+        `model` string (a bare name or relative path) so detectors created
+        before the models table existed still work."""
+        mid = det.get("model_id")
+        if mid:
+            if mid not in self._mid_to_path:
+                m = db.get_model(mid)
+                self._mid_to_path[mid] = m["weights_path"] if m else None
+            path = self._mid_to_path[mid]
+            if path:
+                return path
+            # Unknown model_id → try the legacy field rather than failing.
+            log.warning("detector %s references unknown model_id=%s",
+                        det.get("id"), mid)
+        return det.get("model")
+
     def _get_model(self, model_name: str):
         key = model_name if model_name.endswith(".pt") else f"{model_name}.pt"
-        # Resolve relative paths against the ai-engine directory so configs
-        # like "models/ppe.pt" work regardless of cwd.
+        # Resolution order:
+        #   1. absolute path → use as-is
+        #   2. contains a slash (relative path like "models/ppe.pt") → resolve
+        #      against the ai-engine dir
+        #   3. bare name like "yolov8s" → prefer ai-engine/models/<name>.pt if
+        #      it exists; otherwise fall through to ultralytics' default
+        #      auto-download behavior.
         resolved = key
-        if "/" in key and not key.startswith("/"):
+        if key.startswith("/"):
+            pass  # absolute path
+        elif "/" in key:
             candidate = (_ENGINE_DIR / key).resolve()
             if candidate.exists():
                 resolved = str(candidate)
+        else:
+            packaged = (_ENGINE_DIR / "models" / key).resolve()
+            if packaged.exists():
+                resolved = str(packaged)
         if resolved in self._models:
             return self._models[resolved]
         try:
@@ -576,6 +764,15 @@ class InferenceEngine:
         if boxes is None or len(boxes) == 0:
             return out
         ids = boxes.id
+        # Pose models expose `r.keypoints` with one row per detection. Each row
+        # has shape (K, 2 or 3): xy + optional conf. Older Ultralytics versions
+        # split xy and conf into separate tensors; handle both.
+        keypoints_obj = getattr(r, "keypoints", None)
+        kps_data = None
+        if keypoints_obj is not None:
+            data = getattr(keypoints_obj, "data", None)
+            if data is not None and len(data) > 0:
+                kps_data = data
         for i, box in enumerate(boxes):
             cls_idx = int(box.cls.item())
             name = model_names.get(cls_idx)
@@ -583,12 +780,21 @@ class InferenceEngine:
                 continue
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             track_id = int(ids[i].item()) if ids is not None else -1
-            out.append({
+            det: dict[str, Any] = {
                 "class":    name,
                 "conf":     round(float(box.conf.item()), 3),
                 "bbox":     [round(x1, 1), round(y1, 1), round(x2 - x1, 1), round(y2 - y1, 1)],
                 "track_id": track_id,
-            })
+            }
+            if kps_data is not None and i < len(kps_data):
+                row = kps_data[i].tolist()
+                # Normalize to [[x, y, conf], ...]; pad conf=1.0 if missing.
+                det["keypoints"] = [
+                    [round(float(p[0]), 1), round(float(p[1]), 1),
+                     round(float(p[2]), 3) if len(p) > 2 else 1.0]
+                    for p in row
+                ]
+            out.append(det)
         return out
 
     # ── Plumbing ─────────────────────────────────────────────────────────

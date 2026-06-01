@@ -155,6 +155,62 @@ async def delete_camera(camera_id: str) -> dict:
     return {"ok": True}
 
 
+# ── REST: models ────────────────────────────────────────────────────────────
+
+class ModelIn(BaseModel):
+    id:           str | None       = None
+    name:         str | None       = None
+    description:  str | None       = None
+    kind:         str | None       = None
+    weights_path: str | None       = None
+    classes:      list[str] | None = None
+
+
+@app.get("/api/models")
+def list_models() -> list[dict]:
+    return db.list_models()
+
+
+@app.get("/api/models/{model_id}")
+def get_model(model_id: str) -> dict:
+    m = db.get_model(model_id)
+    if not m:
+        raise HTTPException(404, "model not found")
+    return m
+
+
+@app.post("/api/models")
+def create_model(body: ModelIn) -> dict:
+    if not (body.kind and body.weights_path and body.name):
+        raise HTTPException(400, "name, kind, and weights_path are required")
+    if body.kind not in {"object", "ppe", "pose"}:
+        raise HTTPException(400, "kind must be one of: object, ppe, pose")
+    if body.id and db.get_model(body.id):
+        raise HTTPException(409, "model id already exists")
+    created = db.create_model(body.model_dump(exclude_none=True))
+    assert created is not None
+    return created
+
+
+@app.put("/api/models/{model_id}")
+def update_model(model_id: str, body: ModelIn) -> dict:
+    updated = db.update_model(model_id, body.model_dump(exclude_none=True))
+    if not updated:
+        raise HTTPException(404, "model not found")
+    return updated
+
+
+@app.delete("/api/models/{model_id}")
+def delete_model(model_id: str) -> dict:
+    try:
+        ok = db.delete_model(model_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not ok:
+        raise HTTPException(404, "model not found")
+    return {"ok": True}
+
+
 # ── Engine status (per-camera) ──────────────────────────────────────────────
 
 @app.get("/api/engine/status")

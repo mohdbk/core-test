@@ -33,6 +33,27 @@ export const api = {
       return true;
     }),
   engineStatus: () => json("/api/engine/status"),
+
+  // ── models ───────────────────────────────────────────────────────────
+  listModels:  () => json("/api/models"),
+  getModel:    (id) => json(`/api/models/${encodeURIComponent(id)}`),
+  createModel: (body) =>
+    json("/api/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  updateModel: (id, body) =>
+    json(`/api/models/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteModel: (id) =>
+    fetch(`/api/models/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => {
+      if (!r.ok) throw new Error(`${r.status}`);
+      return true;
+    }),
 };
 
 // Build the WebRTC WHEP URL for a camera's annotated stream. The engine

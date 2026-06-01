@@ -35,40 +35,49 @@ export const OBJECT_CLASSES = [
   "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
 ];
 
+export const VEHICLE_CLASSES = ["car", "truck", "bus", "motorcycle"];
+
 export const MIN_CONF_PARAM = {
   kind: "number", default: 0.5, min: 0.05, max: 0.95, step: 0.05, label: "Min conf",
 };
 
+// Detector types now reference models via `model_id` instead of hard-coding
+// weight paths. Each detector type binds to one model `kind` (object / ppe /
+// pose); the model dropdown is populated from /api/models filtered by that
+// kind. Class chips are derived from the selected model's class list.
 export const DETECTOR_TYPES = {
   object_detection: {
-    label: "Object detection",
-    sublabel: "COCO 80-class",
+    label: "Object Detection",
+    sublabel: "COCO · 80 classes",
     color: "cyan",
+    modelKind: "object",
     params: {
-      model: {
-        kind: "select",
-        options: [
-          { value: "yolov8n", label: "YOLOv8n · fastest" },
-          { value: "yolov8s", label: "YOLOv8s · balanced" },
-          { value: "yolov8m", label: "YOLOv8m · accurate" },
-          { value: "yolov8l", label: "YOLOv8l · heavy" },
-        ],
-        default: "yolov8s",
-        label: "Model",
-      },
-      classes: { kind: "multi", options: OBJECT_CLASSES,
-                 default: ["person", "bicycle", "car", "motorcycle", "bus", "truck"], label: "Classes" },
+      model_id: { kind: "model_ref", forKind: "object", default: null, label: "Model" },
+      classes:  { kind: "multi", source: "model_classes",
+                  default: ["person", "bicycle", "car", "motorcycle", "bus", "truck"], label: "Classes" },
       min_conf: MIN_CONF_PARAM,
     },
   },
   ppe_detection: {
-    label: "PPE detection",
-    sublabel: "hafizqaim / yolov8-ppe",
+    label: "PPE Detection",
+    sublabel: "Personal Protective Equipment",
     color: "lime",
+    modelKind: "ppe",
     params: {
-      model:    { kind: "text",  default: "models/ppe.pt", label: "Model path" },
-      classes:  { kind: "multi", options: PPE_DETECTOR_CLASSES,
+      model_id: { kind: "model_ref", forKind: "ppe", default: null, label: "Model" },
+      classes:  { kind: "multi", source: "model_classes",
                   default: [...PPE_DETECTOR_CLASSES], label: "Classes" },
+      min_conf: MIN_CONF_PARAM,
+    },
+  },
+  pose_detection: {
+    label: "Pose Estimation",
+    sublabel: "17 keypoints per person",
+    color: "violet",
+    modelKind: "pose",
+    params: {
+      model_id: { kind: "model_ref", forKind: "pose", default: null, label: "Model" },
+      classes:  { kind: "multi", source: "model_classes", default: ["person"], label: "Classes" },
       min_conf: MIN_CONF_PARAM,
     },
   },
@@ -76,8 +85,8 @@ export const DETECTOR_TYPES = {
 
 export const RULE_TYPES = {
   intrusion: {
-    label: "Zone intrusion",
-    sublabel: "containment + line crossing",
+    label: "Intrusion",
+    sublabel: "Containment & line crossing",
     color: "rose",
     params: {
       detector: { kind: "detector_ref", default: null, label: "Detector" },
@@ -96,8 +105,8 @@ export const RULE_TYPES = {
     defaultZones: [],
   },
   presence: {
-    label: "Object presence",
-    sublabel: "with optional dwell",
+    label: "Object Presence",
+    sublabel: "With optional dwell",
     color: "cyan",
     params: {
       detector: { kind: "detector_ref", default: null, label: "Detector" },
@@ -107,12 +116,142 @@ export const RULE_TYPES = {
     defaultZones: ["*"],
   },
   ppe_compliance: {
-    label: "PPE compliance",
-    sublabel: "required gear check",
+    label: "PPE Compliance",
+    sublabel: "Required gear check",
     color: "lime",
     params: {
       detector: { kind: "detector_ref", default: null, label: "Detector" },
       required: { kind: "multi", options: PPE_REQUIRED_ITEMS, default: ["head_helmet"], label: "Required PPE" },
+    },
+    defaultZones: ["*"],
+  },
+
+  // ── New safety rules ─────────────────────────────────────────────────
+
+  restricted_zone: {
+    label: "Restricted Zone",
+    sublabel: "No-go zone with time window",
+    color: "rose",
+    params: {
+      detector:      { kind: "detector_ref", default: null, label: "Detector" },
+      classes:       { kind: "multi", source: "detector_classes", default: ["person"], label: "Classes" },
+      active_window: { kind: "text", default: "", label: "Active window (HH:MM-HH:MM)" },
+    },
+    defaultZones: [],
+  },
+
+  idle_vehicle: {
+    label: "Idle Vehicle",
+    sublabel: "Stopped track & low displacement",
+    color: "amber",
+    params: {
+      detector:             { kind: "detector_ref", default: null, label: "Detector" },
+      classes:              { kind: "multi", source: "detector_classes", default: [...VEHICLE_CLASSES], label: "Vehicle classes" },
+      max_displacement_px:  { kind: "number", default: 20, min: 1, max: 500, step: 1, label: "Max displacement (px)" },
+      min_duration_seconds: { kind: "number", default: 30, min: 1, max: 3600, step: 1, label: "Min duration (s)" },
+    },
+    defaultZones: [],
+  },
+
+  speed_enforcement: {
+    label: "Speed Enforcement",
+    sublabel: "Per-zone calibration (px/m or homography)",
+    color: "amber",
+    params: {
+      detector:              { kind: "detector_ref", default: null, label: "Detector" },
+      classes:               { kind: "multi", source: "detector_classes", default: [...VEHICLE_CLASSES], label: "Classes" },
+      max_speed_m_per_sec:   { kind: "number", default: 5, min: 0.1, max: 100, step: 0.1, label: "Max speed (m/s)" },
+      min_consecutive_frames:{ kind: "number", default: 3, min: 1, max: 30, step: 1, label: "Sustain frames" },
+    },
+    defaultZones: [],
+  },
+
+  wrong_way: {
+    label: "Wrong-Way Movement",
+    sublabel: "Line crossing or polygon direction",
+    color: "rose",
+    params: {
+      detector: { kind: "detector_ref", default: null, label: "Detector" },
+      classes:  { kind: "multi", source: "detector_classes", default: [...VEHICLE_CLASSES], label: "Classes" },
+      allowed_direction: {
+        kind: "select",
+        options: [
+          { value: "a_to_b", label: "Only → A to B" },
+          { value: "b_to_a", label: "Only ← B to A" },
+        ],
+        default: "a_to_b", label: "Allowed direction (line)",
+        requires: { zoneKind: "line" },
+      },
+      polygon_tolerance_deg: { kind: "number", default: 45, min: 5, max: 180, step: 5, label: "Polygon angle tolerance (°)" },
+    },
+    defaultZones: [],
+  },
+
+  lone_worker: {
+    label: "Lone Worker",
+    sublabel: "Zone count & isolation distance",
+    color: "amber",
+    params: {
+      detector:     { kind: "detector_ref", default: null, label: "Person detector" },
+      person_class: { kind: "text", default: "person", label: "Person class" },
+      mode: {
+        kind: "select",
+        options: [
+          { value: "zone_bound",          label: "Zone-bound (count == 1)" },
+          { value: "isolation_distance",  label: "Isolation distance" },
+          { value: "both",                label: "Both" },
+        ],
+        default: "both", label: "Mode",
+      },
+      isolation_radius_px:  { kind: "number", default: 200, min: 10, max: 2000, step: 10, label: "Isolation radius (px)" },
+      min_duration_seconds: { kind: "number", default: 60, min: 1, max: 3600, step: 1, label: "Min duration (s)" },
+      // Optional "is this person a worker?" filter — overlap a `worker_class`
+      // detection (typically a hi-vis vest) onto the person bbox before
+      // counting them. Eliminates cafeteria-style false positives.
+      worker_filter: {
+        kind: "select",
+        options: [
+          { value: "none",     label: "Count every person" },
+          { value: "by_class", label: "Require a worker tag (PPE class overlap)" },
+        ],
+        default: "none", label: "Worker filter",
+      },
+      worker_class_detector: { kind: "detector_ref", default: null, label: "Worker-tag detector" },
+      worker_class:          { kind: "text", default: "vest", label: "Worker-tag class" },
+    },
+    defaultZones: [],
+  },
+
+  unsafe_exit: {
+    label: "Unsafe Exit",
+    sublabel: "Person dismounts from a stationary vehicle",
+    color: "rose",
+    params: {
+      vehicle_detector:  { kind: "detector_ref", default: null, label: "Vehicle detector" },
+      vehicle_classes:   { kind: "multi", source: "detector_classes", from: "vehicle_detector",
+                           default: [...VEHICLE_CLASSES], label: "Vehicle classes" },
+      person_detector:   { kind: "detector_ref", default: null, label: "Person detector" },
+      person_class:      { kind: "text", default: "person", label: "Person class" },
+      min_overlap_ratio: { kind: "number", default: 0.3, min: 0.05, max: 1, step: 0.05, label: "Min overlap ratio" },
+    },
+    defaultZones: ["*"],
+  },
+
+  trip_fall: {
+    label: "Trip & Fall",
+    sublabel: "Bbox heuristic or pose estimation",
+    color: "rose",
+    params: {
+      detector: { kind: "detector_ref", default: null, label: "Detector" },
+      mode: {
+        kind: "select",
+        options: [
+          { value: "bbox_heuristic", label: "Bbox heuristic — any object detector" },
+          { value: "pose",           label: "Pose — requires a Pose Estimation detector" },
+        ],
+        default: "bbox_heuristic", label: "Mode",
+      },
+      cooldown_seconds: { kind: "number", default: 5, min: 1, max: 60, step: 1, label: "Cooldown (s)" },
     },
     defaultZones: ["*"],
   },
@@ -135,15 +274,30 @@ export function makeDefaultParams(spec) {
   return params;
 }
 
-// Resolve a rule's `classes` (or PPE `required`) options dynamically from
-// the assigned detector — a rule can only consume what its detector emits.
-export function effectiveOptions(p, mod, modules) {
+// Resolve a multi-select param's options dynamically:
+//
+//   source: "detector_classes" — a rule's `classes` come from the chosen
+//     detector's `classes` (which itself was narrowed from the model). `from`
+//     picks which detector-ref param to read; defaults to `detector`.
+//
+//   source: "model_classes" — a detector's `classes` come from the chosen
+//     model's full class list. Requires the models list to resolve.
+//
+// Defaults are static `options: [...]` arrays.
+export function effectiveOptions(p, mod, modules, models = []) {
   if (p.source === "detector_classes") {
-    const det = modules.find((m) => m.id === mod.params?.detector);
+    const ref = p.from || "detector";
+    const det = modules.find((m) => m.id === mod.params?.[ref]);
     if (det && isDetector(det.type) && Array.isArray(det.params.classes)) {
       return det.params.classes;
     }
     return [];
+  }
+  if (p.source === "model_classes") {
+    const mid = mod.params?.model_id;
+    if (!mid) return [];
+    const m = models.find((mm) => mm.id === mid);
+    return m?.classes || [];
   }
   return p.options || [];
 }

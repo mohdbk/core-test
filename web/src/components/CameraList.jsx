@@ -3,9 +3,13 @@ import { useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useCameras } from "../hooks/useCameras.js";
 import AddCameraDialog from "./AddCameraDialog.jsx";
+import Card from "./Card.jsx";
+import EmptyState from "./EmptyState.jsx";
+import StatusDot from "./StatusDot.jsx";
 
-// Persistent left rail of cameras. Replaces the dropdown switcher as the
-// primary selection surface — always visible, supports many cameras.
+// Left column on the Operations Console. Always-visible camera roster with
+// add-camera affordance. Selection drives the route; the rest of the shell
+// reacts via :cameraId.
 export default function CameraList() {
   const { cameras, refresh } = useCameras();
   const { cameraId } = useParams();
@@ -13,65 +17,76 @@ export default function CameraList() {
   const nav = useNavigate();
   const [showAdd, setShowAdd] = useState(false);
 
-  const viewPrefix = loc.pathname.startsWith("/config") ? "/config" : "/stream";
+  const viewPrefix = loc.pathname.startsWith("/config") ? "/config" : "/console";
   const goto = (id) => nav(`${viewPrefix}/${id}`);
 
   return (
-    <aside className="w-[220px] shrink-0 flex flex-col border-r border-white/[.04] bg-surface/40 backdrop-blur-xl">
-      <header className="px-3 pt-3 pb-1 flex items-center gap-2">
-        <h2 className="label flex items-center gap-1.5">
-          <Camera size={11} strokeWidth={2} className="text-subtle/60" />
-          Cameras
-        </h2>
-        <span className="pill ml-auto">{cameras.length}</span>
-      </header>
-
-      <div className="flex-1 overflow-auto px-2 pt-2 pb-2 space-y-1">
-        {cameras.length === 0 && (
-          <div className="text-subtle/80 text-[12px] px-2 py-3 leading-snug">
-            No cameras yet. Add one to start.
-          </div>
-        )}
-        {cameras.map((c) => (
-          <button
-            key={c.id}
-            onClick={() => goto(c.id)}
-            className={[
-              "w-full text-left p-2 rounded-lg transition-colors flex items-start gap-2.5 group",
-              c.id === cameraId
-                ? "bg-cyan-400/[.08] shadow-[inset_0_0_0_1px_rgba(34,211,238,.30)]"
-                : "hover:bg-white/[.04] border border-transparent",
-            ].join(" ")}
-            title={c.id}
-          >
-            <div
-              className={[
-                "w-7 h-7 grid place-items-center rounded-md shrink-0 transition-colors",
-                c.enabled !== false
-                  ? "bg-cyan-400/10 border border-cyan-400/30 text-cyan-400"
-                  : "bg-white/[.03] border border-white/[.07] text-muted",
-              ].join(" ")}
-            >
-              {c.enabled !== false
-                ? <Video size={13} strokeWidth={1.75} />
-                : <VideoOff size={13} strokeWidth={1.75} />}
-            </div>
-            <div className="flex-1 min-w-0 leading-tight">
-              <div className="text-[13px] truncate text-text">{c.name}</div>
-              <div className="font-mono text-[10px] text-subtle truncate mt-0.5 tabular-nums">
-                {c.zone_count ?? 0} zones · {c.detector_count ?? 0} det · {c.rule_count ?? 0} rules
-              </div>
-            </div>
-          </button>
-        ))}
-      </div>
-
-      <footer className="p-2 border-t border-white/5">
-        <button onClick={() => setShowAdd(true)} className="btn-primary w-full">
+    <Card
+      icon={Camera}
+      title="Cameras"
+      count={cameras.length}
+      right={
+        <button
+          onClick={() => setShowAdd(true)}
+          title="Add camera"
+          className="grid place-items-center w-5 h-5 rounded text-text/55 hover:text-cyan-300 hover:bg-white/[.04] transition-colors"
+        >
           <Plus size={12} strokeWidth={2.25} />
-          New camera
         </button>
-      </footer>
+      }
+      className="h-full min-h-0"
+      bodyClassName="p-1.5 overflow-y-auto"
+    >
+      {cameras.length === 0 ? (
+        <EmptyState
+          icon={Video}
+          title="No cameras"
+          hint="Add a camera to start monitoring."
+          action={
+            <button onClick={() => setShowAdd(true)} className="btn-primary">
+              <Plus size={12} strokeWidth={2.25} /> Add camera
+            </button>
+          }
+        />
+      ) : (
+        <div className="space-y-1">
+          {cameras.map((c) => {
+            const selected = c.id === cameraId;
+            const live = c.enabled !== false;
+            return (
+              <button
+                key={c.id}
+                onClick={() => goto(c.id)}
+                title={c.id}
+                className={[
+                  "w-full text-left p-2 rounded-md flex items-center gap-2 group transition-colors",
+                  selected
+                    ? "bg-cyan-400/[.08] border border-cyan-400/30 shadow-[inset_0_0_0_1px_rgba(34,211,238,.20)]"
+                    : "border border-white/[.04] hover:border-white/[.10] hover:bg-white/[.02]",
+                ].join(" ")}
+              >
+                <div
+                  className={[
+                    "grid place-items-center w-7 h-7 rounded shrink-0 border",
+                    live
+                      ? "bg-cyan-400/[.08] border-cyan-400/30 text-cyan-300"
+                      : "bg-white/[.02] border-white/[.06] text-text/45",
+                  ].join(" ")}
+                >
+                  {live ? <Video size={13} strokeWidth={1.75} /> : <VideoOff size={13} strokeWidth={1.75} />}
+                </div>
+                <div className="flex-1 min-w-0 leading-tight">
+                  <div className="text-[13px] text-text truncate">{c.name}</div>
+                  <div className="font-mono text-[10px] text-text/50 truncate mt-0.5 tabular-nums">
+                    {c.zone_count ?? 0} zones · {c.detector_count ?? 0} det · {c.rule_count ?? 0} rules
+                  </div>
+                </div>
+                {live && <StatusDot tone="live" pulse size={6} className="shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {showAdd && (
         <AddCameraDialog
@@ -79,6 +94,6 @@ export default function CameraList() {
           onCreated={(cam) => { setShowAdd(false); refresh(); goto(cam.id); }}
         />
       )}
-    </aside>
+    </Card>
   );
 }
